@@ -81,6 +81,11 @@ mup_width_multiplier = 1.0 # mup_width_multiplier = width / base_width where bas
 mup_input_alpha = 1.0 # Optional tunable multiplier applied to input embedding forward pass output
 mup_output_alpha = 1.0 # Optional tunable multiplier applied to output unembedding forward pass output
 mup_enable_coord_check_logging = False # If True will track the output.abs().mean() of various layers throughout training
+# MOE settings
+num_exp = 1 # Number of experts (set to 1 to disable MOE)
+num_act = 1 # Number of active experts (top-k)
+moe_tau = 1.0 # Temperature for router softmax
+moe_bias_lr = 1e-2 # Learning rate for router bias updates
 # seed
 seed = 1337
 # DDP settings
@@ -164,11 +169,12 @@ if os.path.exists(meta_path):
 
 # model init
 model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=block_size,
-                  bias=bias, vocab_size=None, dropout=dropout, mup_enabled=mup_enabled,
-                  mup_disable_attention_scaling=mup_disable_attention_scaling,
+                  bias=bias, vocab_size=None, dropout=dropout, init_std=init_std, 
+                  mup_enabled=mup_enabled, mup_disable_attention_scaling=mup_disable_attention_scaling,
                   mup_disable_hidden_lr_scaling=mup_disable_hidden_lr_scaling,
                   mup_width_multiplier=mup_width_multiplier, mup_input_alpha=mup_input_alpha,
-                  mup_output_alpha=mup_output_alpha) # start with model_args from command line
+                  mup_output_alpha=mup_output_alpha, num_exp=num_exp, num_act=num_act,
+                  moe_tau=moe_tau, moe_bias_lr=moe_bias_lr) # start with model_args from command line
 
 if init_from == 'scratch':
     # init a new model from scratch
@@ -217,7 +223,7 @@ if block_size < model.config.block_size:
 model.to(device)
 
 # initialize a GradScaler. If enabled=False scaler is a no-op
-scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
+scaler = torch.amp.GradScaler('cuda', enabled=(dtype == 'float16'))
 
 # optimizer
 optimizer = model.configure_optimizers(weight_decay, learning_rate, (beta1, beta2), device_type)
@@ -291,7 +297,10 @@ while True:
     # determine and set the learning rate for this iteration
     lr = get_lr(iter_num) if decay_lr else learning_rate
     for param_group in optimizer.param_groups:
-        param_group['lr'] = lr * param_group.get('lr_scale', 1.0)
+        if param_group.get('is_router', False):
+            param_group['lr'] = lr
+        else:
+            param_group['lr'] = lr * param_group.get('lr_scale', 1.0)
 
     # evaluate the loss on train/val sets and write checkpoints
     if iter_num % eval_interval == 0 and master_process:
@@ -378,6 +387,23 @@ while True:
     scaler.update()
     # flush the gradients as soon as we can, no need for this memory anymore
     optimizer.zero_grad(set_to_none=True)
+    
+    # Update router biases for MOE layers
+    if num_exp > 1 and iter_num % 3 == 0:  # Update biases every 3 iterations
+        with torch.no_grad():
+            for i, block in enumerate(raw_model.transformer.h):
+                if hasattr(block, 'use_moe') and block.use_moe:
+                    # Collect masks from recent forward passes
+                    mlp_moe = block.mlp
+                    if mlp_moe.total_tokens > 0:
+                        # Calculate average usage per expert
+                        avg_usage = mlp_moe.tokens_per_expert / mlp_moe.total_tokens
+                        target_usage = mlp_moe.num_act / mlp_moe.n_exp
+                        # Update bias
+                        mlp_moe.bias.data -= moe_bias_lr * (avg_usage - target_usage)
+                        # Reset counters
+                        mlp_moe.tokens_per_expert.zero_()
+                        mlp_moe.total_tokens.zero_()
 
     # timing and logging
     t1 = time.time()

@@ -102,6 +102,97 @@ class MLP(nn.Module):
         x = self.dropout(x)
         return x
 
+class Expert(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        self.c_fc = nn.Linear(config.n_embd, 4 * config.n_embd, bias=config.bias)
+        self.gelu = nn.GELU()
+        self.c_proj = nn.Linear(4 * config.n_embd, config.n_embd, bias=config.bias)
+        self.dropout = nn.Dropout(config.dropout)
+        
+    def forward(self, x):
+        if self.config.mup_enabled:
+            # muP: scale activations in forward pass
+            h = self.gelu(self.c_fc(x) / math.sqrt(self.config.n_embd))
+            out = self.c_proj(h) / (4 * self.config.n_embd)
+        else:
+            h = self.gelu(self.c_fc(x))
+            out = self.c_proj(h)
+        out = self.dropout(out)
+        return out
+
+class MLP_MOE(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        self.n_exp = config.num_exp
+        self.num_act = config.num_act  # top_k
+        self.tau = config.moe_tau if hasattr(config, 'moe_tau') else 1.0
+        
+        # Router
+        self.router = nn.Linear(config.n_embd, self.n_exp, bias=False)
+        self.bias = nn.Parameter(torch.zeros(self.n_exp))
+        
+        # Experts
+        self.experts = nn.ModuleList([Expert(config) for _ in range(self.n_exp)])
+        
+        # For tracking tokens per expert (needed for learning rate calculation)
+        self.register_buffer('tokens_per_expert', torch.zeros(self.n_exp))
+        self.register_buffer('total_tokens', torch.tensor(0.0))
+        
+    def h_func(self, x):
+        return F.softmax(x, dim=-1)
+    
+    def s_func(self, x):
+        return torch.sigmoid(x)
+    
+    def forward(self, x):
+        B, T, C = x.shape
+        x_flat = x.view(-1, C)  # (B*T, C)
+        
+        # Router forward pass
+        logit = self.router(x_flat) / math.sqrt(C)
+       
+        score = self.s_func(logit)  # (B*T, n_exp)
+        mu_add_bias = self.h_func(logit / self.tau) + self.bias  # (B*T, n_exp)
+        
+        # Top-k selection
+        _, topk_indices = mu_add_bias.topk(self.num_act, dim=-1)  # (B*T, num_act)
+        mask = torch.zeros_like(mu_add_bias)  # (B*T, n_exp)
+        mask.scatter_(1, topk_indices, 1)
+        
+        gate = (mask.detach() * score).unsqueeze(-1)  # (B*T, n_exp, 1)
+        
+        # Expert forward pass
+        expert_outputs = []
+        for i, expert in enumerate(self.experts):
+            expert_mask = mask[:, i].unsqueeze(-1)  # (B*T, 1)
+            if expert_mask.any():
+                expert_out = expert(x_flat) * expert_mask  # (B*T, C)
+            else:
+                expert_out = torch.zeros_like(x_flat)
+            expert_outputs.append(expert_out)
+        
+        expert_out_stacked = torch.stack(expert_outputs, dim=1)  # (B*T, n_exp, C)
+        
+        # Combine expert outputs
+        output = (gate * expert_out_stacked).sum(dim=1)  # (B*T, C)
+        output = output.view(B, T, C)  # (B, T, C)
+        
+        # Update tokens per expert for learning rate calculation
+        if self.training:
+            self.tokens_per_expert += mask.sum(dim=0).detach()
+            self.total_tokens += mask.shape[0]
+        
+        return output, mask.detach()
+    
+    def update_router_bias(self, mask, lr_bias):
+        """Update router bias to encourage balanced expert usage"""
+        q_hat = mask.float().mean(dim=0)  # (n_exp,)
+        target_usage = self.num_act / self.n_exp
+        self.bias.data -= lr_bias * (q_hat - target_usage)
+
 class Block(nn.Module):
 
     def __init__(self, config):
@@ -109,12 +200,22 @@ class Block(nn.Module):
         self.ln_1 = LayerNorm(config.n_embd, bias=config.bias)
         self.attn = CausalSelfAttention(config)
         self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
-        self.mlp = MLP(config)
+        if hasattr(config, 'num_exp') and config.num_exp > 1:
+            self.mlp = MLP_MOE(config)
+            self.use_moe = True
+        else:
+            self.mlp = MLP(config)
+            self.use_moe = False
 
     def forward(self, x):
         x = x + self.attn(self.ln_1(x))
-        x = x + self.mlp(self.ln_2(x))
-        return x
+        if self.use_moe:
+            mlp_out, mask = self.mlp(self.ln_2(x))
+            x = x + mlp_out
+            return x, mask
+        else:
+            x = x + self.mlp(self.ln_2(x))
+            return x
 
 @dataclass
 class GPTConfig:
@@ -132,6 +233,11 @@ class GPTConfig:
     mup_width_multiplier: float = 1 # `mup_width_multiplier = width / base_width` where base_width is typically 256
     mup_input_alpha: float = 1 # Optional tunable multiplier applied to input embedding forward pass output
     mup_output_alpha: float = 1 # Optional tunable multiplier applied to output unembedding forward pass output
+    # MOE parameters
+    num_exp: int = 1 # Number of experts (set to 1 to disable MOE)
+    num_act: int = 1 # Number of active experts (top-k)
+    moe_tau: float = 1.0 # Temperature for router softmax
+    moe_bias_lr: float = 1e-2 # Learning rate for router bias updates
 
 class GPT(nn.Module):
 
@@ -165,10 +271,22 @@ class GPT(nn.Module):
                 if pn.endswith('c_attn.weight') or pn.endswith('c_fc.weight'):
                     torch.nn.init.normal_(p, mean=0.0, std=config.init_std / math.sqrt(config.mup_width_multiplier))
                 elif pn.endswith('c_proj.weight'):
-                    torch.nn.init.normal_(p, mean=0.0, std=config.init_std / math.sqrt(2 * config.n_layer * config.mup_width_multiplier))
+                    # Handle both regular MLP and MOE experts
+                    if 'experts' in pn:
+                        # MOE expert output projection
+                        torch.nn.init.normal_(p, mean=0.0, std=config.init_std / math.sqrt(2 * config.n_layer * config.mup_width_multiplier))
+                    else:
+                        torch.nn.init.normal_(p, mean=0.0, std=config.init_std / math.sqrt(2 * config.n_layer * config.mup_width_multiplier))
+                elif pn.endswith('router.weight'):
+                    # Router initialization
+                    torch.nn.init.normal_(p, mean=0.0, std=config.init_std)
                 ### End muP code ###
             elif pn.endswith('c_proj.weight'):
+                # Handle both regular MLP and MOE experts for non-muP
                 torch.nn.init.normal_(p, mean=0.0, std=config.init_std / math.sqrt(2 * config.n_layer))
+            elif pn.endswith('router.weight'):
+                # Router initialization for non-muP
+                torch.nn.init.normal_(p, mean=0.0, std=config.init_std)
 
         # report number of parameters
         print("number of parameters: %.2fM" % (self.get_num_params()/1e6,))
@@ -207,8 +325,13 @@ class GPT(nn.Module):
             ### Begin muP code ###
             x *= self.config.mup_input_alpha
             ### End muP code ###
+        expert_masks = []
         for block in self.transformer.h:
-            x = block(x)
+            if block.use_moe:
+                x, mask = block(x)
+                expert_masks.append(mask)
+            else:
+                x = block(x)
         x = self.transformer.ln_f(x)
 
         if targets is not None:
@@ -300,6 +423,22 @@ class GPT(nn.Module):
         param_dict = {pn: p for pn, p in self.named_parameters()}
         # filter out those that do not require grad
         param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
+        
+        # Collect MOE router parameters separately
+        router_params = {}
+        router_biases = {}
+        
+        # Identify MOE blocks and compute tokens per expert
+        for i, block in enumerate(self.transformer.h):
+            if hasattr(block, 'use_moe') and block.use_moe:
+                # Collect router weights and biases
+                router_name = f'transformer.h.{i}.mlp.router.weight'
+                bias_name = f'transformer.h.{i}.mlp.bias'
+                if router_name in param_dict:
+                    router_params[router_name] = param_dict[router_name]
+                if bias_name in param_dict:
+                    router_biases[bias_name] = param_dict[bias_name]
+        
         # create optim groups. Any parameters that is 2D will be weight decayed, otherwise no.
         # i.e. all weight tensors in matmuls + embeddings decay, all biases and layernorms don't.
         if self.config.mup_enabled and not self.config.mup_disable_hidden_lr_scaling:
@@ -307,37 +446,90 @@ class GPT(nn.Module):
             mup_decay_params = []
             decay_params = []
             nodecay_params = []
+            router_param_list = []
+            
             for n, p in param_dict.items():
-                if p.dim() >= 2:
+                if n in router_params:
+                    # Router parameters get special treatment
+                    router_param_list.append((n, p))
+                elif n in router_biases:
+                    # Router biases are excluded from optimizer (updated manually)
+                    continue
+                elif p.dim() >= 2:
+                    
                     if n.endswith('c_attn.weight') or n.endswith('c_fc.weight') or n.endswith('c_proj.weight'):
                         mup_decay_params.append(p)
                     else:
                         decay_params.append(p)
                 else:
                     nodecay_params.append(p)
+            
             optim_groups = [
                 {'params': mup_decay_params, 'weight_decay': weight_decay, 'lr_scale': 1/self.config.mup_width_multiplier},
                 {'params': decay_params, 'weight_decay': weight_decay, 'lr_scale': 1},
                 {'params': nodecay_params, 'weight_decay': 0.0, 'lr_scale': 1}
             ]
+            
+            # Add router parameter groups with dynamic learning rates
+            # These will be computed dynamically in the training loop based on tokens per expert
+            for router_name, router_param in router_param_list:
+                layer_idx = int(router_name.split('.')[2])  # Extract layer index
+                optim_groups.append({
+                    'params': [router_param],
+                    'weight_decay': weight_decay,
+                    'lr_scale': 1,  # Will be dynamically adjusted in training loop
+                    'is_router': True,
+                    'layer_idx': layer_idx
+                })
+            
             num_mup_decay_params = sum(p.numel() for p in mup_decay_params)
             num_decay_params = sum(p.numel() for p in decay_params)
             num_nodecay_params = sum(p.numel() for p in nodecay_params)
+            num_router_params = sum(p.numel() for n, p in router_param_list)
             print(f"num mup decayed parameter tensors: {len(mup_decay_params)}, with {num_mup_decay_params:,} parameters")
             print(f"num decayed parameter tensors: {len(decay_params)}, with {num_decay_params:,} parameters")
             print(f"num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay_params:,} parameters")
+            print(f"num router parameter tensors: {len(router_param_list)}, with {num_router_params:,} parameters")
             ### End muP code ###
         else:
-            decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
-            nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]
+            # Non-muP case
+            decay_params = []
+            nodecay_params = []
+            router_param_list = []
+            
+            for n, p in param_dict.items():
+                if n in router_params:
+                    router_param_list.append((n, p))
+                elif n in router_biases:
+                    continue  # Exclude router biases
+                elif p.dim() >= 2:
+                    decay_params.append(p)
+                else:
+                    nodecay_params.append(p)
+                    
             optim_groups = [
                 {'params': decay_params, 'weight_decay': weight_decay},
                 {'params': nodecay_params, 'weight_decay': 0.0}
             ]
+            
+            # Add router parameter groups
+            for router_name, router_param in router_param_list:
+                layer_idx = int(router_name.split('.')[2])
+                optim_groups.append({
+                    'params': [router_param],
+                    'weight_decay': weight_decay,
+                    'lr_scale': 1,
+                    'is_router': True,
+                    'layer_idx': layer_idx
+                })
+            
             num_decay_params = sum(p.numel() for p in decay_params)
             num_nodecay_params = sum(p.numel() for p in nodecay_params)
+            num_router_params = sum(p.numel() for n, p in router_param_list)
             print(f"num decayed parameter tensors: {len(decay_params)}, with {num_decay_params:,} parameters")
             print(f"num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay_params:,} parameters")
+            print(f"num router parameter tensors: {len(router_param_list)}, with {num_router_params:,} parameters")
+            
         # Create AdamW optimizer and use the fused version if it is available
         fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters
         use_fused = fused_available and device_type == 'cuda'
