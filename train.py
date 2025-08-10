@@ -22,11 +22,16 @@ import math
 import pickle
 from contextlib import nullcontext
 from functools import partial
+import warnings
 
 import numpy as np
 import torch
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
+from tqdm import tqdm
+
+# Suppress cuDNN SDPA stride warnings (harmless performance optimization messages)
+warnings.filterwarnings("ignore", message=".*cuDNN SDPA backward.*", category=UserWarning)
 
 from model import GPTConfig, GPT
 
@@ -86,6 +91,7 @@ num_exp = 1 # Number of experts (set to 1 to disable MOE)
 num_act = 1 # Number of active experts (top-k)
 moe_tau = 1.0 # Temperature for router softmax
 moe_bias_lr = 1e-2 # Learning rate for router bias updates
+alpha = 4.0 # Hidden layer size multiplier (hidden_size = alpha * n_embd)
 # seed
 seed = 1337
 # DDP settings
@@ -174,7 +180,7 @@ model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=bloc
                   mup_disable_hidden_lr_scaling=mup_disable_hidden_lr_scaling,
                   mup_width_multiplier=mup_width_multiplier, mup_input_alpha=mup_input_alpha,
                   mup_output_alpha=mup_output_alpha, num_exp=num_exp, num_act=num_act,
-                  moe_tau=moe_tau, moe_bias_lr=moe_bias_lr) # start with model_args from command line
+                  moe_tau=moe_tau, moe_bias_lr=moe_bias_lr, alpha=alpha) # start with model_args from command line
 
 if init_from == 'scratch':
     # init a new model from scratch
@@ -292,6 +298,22 @@ local_iter_num = 0 # number of iterations in the lifetime of this process
 raw_model = model.module if ddp else model # unwrap DDP container if needed
 running_mfu = -1.0
 coord_check_dict = None
+
+# Initialize tqdm progress bar (only on master process)
+pbar = None
+moe_pbars = []
+if master_process:
+    pbar = tqdm(initial=iter_num, total=max_iters, desc="Training", 
+                unit="iter", dynamic_ncols=True, position=0)
+    
+    # Create separate progress bars for each MOE layer if MOE is enabled
+    if num_exp > 1:
+        for i in range(n_layer):
+            layer_pbar = tqdm(total=0, desc=f"L{i}: Initializing...", 
+                            unit="", leave=False, position=i+1, 
+                            bar_format='{desc}')
+            moe_pbars.append(layer_pbar)
+
 while True:
 
     # determine and set the learning rate for this iteration
@@ -307,7 +329,7 @@ while True:
         losses = estimate_loss()
         if np.isnan(losses['train']):
             raise Exception('NaN loss')
-        print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+     #   print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
         log_dict = {
             "iter": iter_num,
             "train/loss": losses['train'],
@@ -388,17 +410,26 @@ while True:
     # flush the gradients as soon as we can, no need for this memory anymore
     optimizer.zero_grad(set_to_none=True)
     
-    # Update router biases for MOE layers
-    if num_exp > 1 and iter_num % 3 == 0:  # Update biases every 3 iterations
+    # Update router biases for MOE layers and collect stats for tqdm
+    moe_layer_stats = []
+    if num_exp > 1:  # Update biases every iteration
         with torch.no_grad():
             for i, block in enumerate(raw_model.transformer.h):
                 if hasattr(block, 'use_moe') and block.use_moe:
                     # Collect masks from recent forward passes
                     mlp_moe = block.mlp
                     if mlp_moe.total_tokens > 0:
+                        #print(f"total_tokens={mlp_moe.total_tokens}")
                         # Calculate average usage per expert
                         avg_usage = mlp_moe.tokens_per_expert / mlp_moe.total_tokens
                         target_usage = mlp_moe.num_act / mlp_moe.n_exp
+                        # Store detailed stats for each layer
+                        moe_layer_stats.append({
+                            'layer': i,
+                            'usage': [f'{u:.3f}' for u in avg_usage.tolist()],
+                            'bias': [f'{b:.3f}' for b in mlp_moe.bias.tolist()],
+                            'target': target_usage
+                        })
                         # Update bias
                         mlp_moe.bias.data -= moe_bias_lr * (avg_usage - target_usage)
                         # Reset counters
@@ -409,14 +440,36 @@ while True:
     t1 = time.time()
     dt = t1 - t0
     t0 = t1
-    if iter_num % log_interval == 0 and master_process:
-        # get loss as float. note: this is a CPU-GPU sync point
-        # scale up to undo the division above, approximating the true total loss (exact would have been a sum)
-        lossf = loss.item() * gradient_accumulation_steps
-        if local_iter_num >= 5: # let the training loop settle a bit
-            mfu = raw_model.estimate_mfu(batch_size * gradient_accumulation_steps, dt)
-            running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
-        print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
+    if master_process and pbar is not None:
+        # Update progress bar every iteration
+        pbar.update(1)
+        
+        # Update description with detailed info at log intervals
+        if iter_num % log_interval == 0:
+            # get loss as float. note: this is a CPU-GPU sync point
+            # scale up to undo the division above, approximating the true total loss (exact would have been a sum)
+            lossf = loss.item() * gradient_accumulation_steps
+            if local_iter_num >= 5: # let the training loop settle a bit
+                mfu = raw_model.estimate_mfu(batch_size * gradient_accumulation_steps, dt)
+                running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
+            
+            # Build main progress line
+            main_postfix = {
+                'loss': f'{lossf:.4f}',
+                'time': f'{dt*1000:.1f}ms',
+                'mfu': f'{running_mfu*100:.1f}%'
+            }
+            pbar.set_postfix(main_postfix)
+            
+            # Update MOE layer progress bars in place
+            if moe_layer_stats and moe_pbars:
+                for stats in moe_layer_stats:
+                    layer_idx = stats['layer']
+                    if layer_idx < len(moe_pbars):
+                        usage_str = ','.join(stats['usage'])
+                        bias_str = ','.join(stats['bias'])
+                        layer_desc = f"L{layer_idx}: usage[{usage_str}] bias[{bias_str}] target={stats['target']:.3f}"
+                        moe_pbars[layer_idx].set_description(layer_desc)
     iter_num += 1
     local_iter_num += 1
 
@@ -426,7 +479,15 @@ while True:
 
     # termination conditions
     if iter_num > max_iters:
+        print(f"max_iters={max_iters} reached\n" + "\n" * n_layer)
+        
         break
+
+# Close progress bars
+if master_process and pbar is not None:
+    pbar.close()
+    for moe_pbar in moe_pbars:
+        moe_pbar.close()
 
 if ddp:
     destroy_process_group()

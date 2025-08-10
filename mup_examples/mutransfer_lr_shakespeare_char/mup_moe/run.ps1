@@ -1,8 +1,8 @@
 # muP hyperparameter transfer with MOE - PowerShell version
 
-$widths = @(384, 256, 128)
+$widths = @(128)
 $lrs = @(0.125, 0.03125, 0.0078125, 0.001953125,0.00048828125,0.0001220703125)
-$num_exps = @(16, 8, 4)
+$num_exps = @(4, 2)
 $seeds = @(1)
 
 foreach ($width in $widths) {
@@ -29,18 +29,18 @@ foreach ($width in $widths) {
                     --wandb_log=False `
                     --csv_log=True `
                     --dataset='shakespeare_char' `
-                    --gradient_accumulation_steps=$((4 * $num_exp)) `
-                    --batch_size=16 `
+                    --gradient_accumulation_steps=$((8 * $num_exp)) `
+                    --batch_size=64 `
                     --block_size=1024 `
-                    --n_layer=2 `
+                    --n_layer=4 `
                     --n_head=$n_heads `
                     --n_embd=$width `
                     --dropout=0.0 `
                     --bias=False `
                     --init_std=0.02 `
                     --learning_rate=$lr `
-                    --max_iters=90 `
-                    --weight_decay=1e-1 `
+                    --max_iters=300 `
+                    --weight_decay=1e-3 `
                     --beta1=0.9 `
                     --beta2=0.95 `
                     --grad_clip=1.0 `
@@ -52,11 +52,11 @@ foreach ($width in $widths) {
                     --num_exp=$num_exp `
                     --num_act=$num_act `
                     --moe_tau=1.0 `
-                    --moe_bias_lr=1e-2 `
+                    --moe_bias_lr=1e-1 `
                     --seed=$seed `
                     --backend='nccl' `
                     --device='cuda' `
-                    --dtype='float32' `
+                    --dtype='float16' `
                     --compile=False
             }
         }

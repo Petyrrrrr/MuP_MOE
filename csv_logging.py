@@ -143,8 +143,14 @@ class CSVLogWrapper:
 
     def close(self):
         if self.csv_data_file:
+            self.csv_data_file.flush()  # Ensure all data is written
             self.csv_data_file.close()
-
+            self.csv_data_file = None  # Clear the reference
+        
+        # Small delay to let Windows release file handles
+        import time
+        time.sleep(0.05)
+        
         self.finalize_csv()
 
     def finalize_csv(self):
@@ -153,16 +159,31 @@ class CSVLogWrapper:
 
         csv_final_path = os.path.join(self.out_dir, 'log.csv')
 
-        with open(csv_final_path, 'w', newline='') as final_csv:
-            # Copy header
-            with open(self.csv_header_path, 'r') as header_file:
-                final_csv.write(header_file.read())
+        try:
+            with open(csv_final_path, 'w', newline='') as final_csv:
+                # Copy header
+                with open(self.csv_header_path, 'r') as header_file:
+                    final_csv.write(header_file.read())
 
-            # Copy data
-            with open(self.csv_data_path, 'r') as data_file:
-                final_csv.write(data_file.read())
-        self.is_finalized = True
+                # Copy data
+                with open(self.csv_data_path, 'r') as data_file:
+                    final_csv.write(data_file.read())
+            self.is_finalized = True
 
-        # Remove the temporary files
-        os.remove(self.csv_header_path)
-        os.remove(self.csv_data_path)
+            # Remove the temporary files with retry logic for Windows
+            import time
+            for file_path in [self.csv_header_path, self.csv_data_path]:
+                for attempt in range(3):
+                    try:
+                        if os.path.exists(file_path):
+                            os.remove(file_path)
+                        break
+                    except PermissionError:
+                        if attempt < 2:  # Retry up to 3 times
+                            time.sleep(0.1)  # Wait 100ms before retry
+                        else:
+                            # If all retries fail, just ignore the error
+                            pass
+        except Exception:
+            # If finalization fails completely, just mark as finalized to prevent repeated attempts
+            self.is_finalized = True

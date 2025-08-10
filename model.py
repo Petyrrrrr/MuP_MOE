@@ -90,9 +90,10 @@ class MLP(nn.Module):
 
     def __init__(self, config):
         super().__init__()
-        self.c_fc    = nn.Linear(config.n_embd, 4 * config.n_embd, bias=config.bias)
+        hidden_size = int(config.alpha * config.n_embd)
+        self.c_fc    = nn.Linear(config.n_embd, hidden_size, bias=config.bias)
         self.gelu    = nn.GELU()
-        self.c_proj  = nn.Linear(4 * config.n_embd, config.n_embd, bias=config.bias)
+        self.c_proj  = nn.Linear(hidden_size, config.n_embd, bias=config.bias)
         self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x):
@@ -106,16 +107,18 @@ class Expert(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
-        self.c_fc = nn.Linear(config.n_embd, 4 * config.n_embd, bias=config.bias)
+        hidden_size = int(config.alpha * config.n_embd)
+        self.c_fc = nn.Linear(config.n_embd, hidden_size, bias=config.bias)
         self.gelu = nn.GELU()
-        self.c_proj = nn.Linear(4 * config.n_embd, config.n_embd, bias=config.bias)
+        self.c_proj = nn.Linear(hidden_size, config.n_embd, bias=config.bias)
         self.dropout = nn.Dropout(config.dropout)
         
     def forward(self, x):
         if self.config.mup_enabled:
             # muP: scale activations in forward pass
             h = self.gelu(self.c_fc(x) / math.sqrt(self.config.n_embd))
-            out = self.c_proj(h) / (4 * self.config.n_embd)
+            hidden_size = int(self.config.alpha * self.config.n_embd)
+            out = self.c_proj(h) / hidden_size
         else:
             h = self.gelu(self.c_fc(x))
             out = self.c_proj(h)
@@ -182,7 +185,7 @@ class MLP_MOE(nn.Module):
         
         # Update tokens per expert for learning rate calculation
         if self.training:
-            self.tokens_per_expert += mask.sum(dim=0).detach()
+            self.tokens_per_expert += mask.sum(dim=0).detach() # has shape (n_exp,)
             self.total_tokens += mask.shape[0]
         
         return output, mask.detach()
@@ -238,6 +241,7 @@ class GPTConfig:
     num_act: int = 1 # Number of active experts (top-k)
     moe_tau: float = 1.0 # Temperature for router softmax
     moe_bias_lr: float = 1e-2 # Learning rate for router bias updates
+    alpha: float = 4.0 # Hidden layer size multiplier (hidden_size = alpha * n_embd)
 
 class GPT(nn.Module):
 
