@@ -52,7 +52,11 @@ foreach ($width in $widths) {
                     --num_exp=$num_exp `
                     --num_act=$num_act `
                     --moe_tau=1.0 `
-                    --moe_bias_lr=1e-1 `
+                    --moe_bias_lr=1e-2 `
+                    --moe_bias_momentum=0.5 `
+                    --moe_bias_momentum_enabled=True `
+                    --moe_load_balance_method='bias' `
+                    --moe_aux_loss_weight=1.0 `
                     --seed=$seed `
                     --backend='nccl' `
                     --device='cuda' `

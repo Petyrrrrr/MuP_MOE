@@ -10,10 +10,56 @@ https://github.com/huggingface/transformers/blob/main/src/transformers/models/gp
 import math
 import inspect
 from dataclasses import dataclass
+from typing import Union, Optional, Tuple
 
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+
+def load_balancing_loss_func(
+    gate_logits: Union[torch.Tensor, Tuple[torch.Tensor, ...], None],
+    num_experts: Optional[int] = None,
+    top_k: int = 2,
+) -> Union[torch.Tensor, int]:
+    """
+    Computes auxiliary load balancing loss as in Switch Transformer.
+    
+    Args:
+        gate_logits: Tuple of tensors of shape [batch_size * sequence_length, num_experts]
+        num_experts: Number of experts
+        top_k: Number of experts to route per token
+        
+    Returns:
+        The auxiliary loss.
+    """
+    if gate_logits is None or not isinstance(gate_logits, tuple):
+        return 0
+    
+    if len(gate_logits) == 0:
+        return 0
+    
+    # Concatenate gate logits from all layers
+    compute_device = gate_logits[0].device
+    concatenated_gate_logits = torch.cat([layer_gate.to(compute_device) for layer_gate in gate_logits], dim=0)
+    
+    # Compute routing weights (softmax probabilities)
+    routing_weights = torch.nn.functional.softmax(concatenated_gate_logits, dim=-1)
+    
+    # Get top-k expert selections
+    _, selected_experts = torch.topk(routing_weights, top_k, dim=-1)
+    
+    # Create expert mask (one-hot for selected experts)
+    expert_mask = torch.nn.functional.one_hot(selected_experts, num_experts)
+    
+    # Compute the percentage of tokens routed to each expert
+    tokens_per_expert = torch.mean(expert_mask.float(), dim=0)
+    
+    # Compute the average probability of routing to each expert
+    router_prob_per_expert = torch.mean(routing_weights, dim=0)
+    
+    # Compute auxiliary loss: sum(tokens_per_expert * router_prob_per_expert) * num_experts
+    overall_loss = torch.sum(tokens_per_expert * router_prob_per_expert.unsqueeze(0))
+    return overall_loss * num_experts
 
 class LayerNorm(nn.Module):
     """ LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False """
@@ -144,6 +190,11 @@ class MLP_MOE(nn.Module):
         self.register_buffer('tokens_per_expert', torch.zeros(self.n_exp))
         self.register_buffer('total_tokens', torch.tensor(0.0))
         
+        # Momentum buffer for bias gradients (EMA of gradients)
+        self.register_buffer('bias_momentum_buffer', torch.zeros(self.n_exp))
+        self.moe_bias_momentum = config.moe_bias_momentum if hasattr(config, 'moe_bias_momentum') else 0.9
+        self.moe_bias_momentum_enabled = config.moe_bias_momentum_enabled if hasattr(config, 'moe_bias_momentum_enabled') else False
+        
     def h_func(self, x):
         return F.softmax(x, dim=-1)
     
@@ -183,18 +234,32 @@ class MLP_MOE(nn.Module):
         output = (gate * expert_out_stacked).sum(dim=1)  # (B*T, C)
         output = output.view(B, T, C)  # (B, T, C)
         
-        # Update tokens per expert for learning rate calculation
+        # Always track tokens per expert for monitoring/display purposes
         if self.training:
             self.tokens_per_expert += mask.sum(dim=0).detach() # has shape (n_exp,)
             self.total_tokens += mask.shape[0]
         
-        return output, mask.detach()
+        # Return gate logits for auxiliary loss if using aux_loss method
+        if self.config.moe_load_balance_method == "aux_loss":
+            # Return logits with bias but before softmax for aux loss
+            logits_with_bias = logit / self.tau + self.bias
+            return output, mask.detach(), logits_with_bias
+        else:
+            return output, mask.detach()
     
-    def update_router_bias(self, mask, lr_bias):
-        """Update router bias to encourage balanced expert usage"""
-        q_hat = mask.float().mean(dim=0)  # (n_exp,)
-        target_usage = self.num_act / self.n_exp
-        self.bias.data -= lr_bias * (q_hat - target_usage)
+    def update_router_bias(self, avg_usage, target_usage, lr_bias):
+        """Update router bias to encourage balanced expert usage with optional momentum"""
+        gradient = avg_usage - target_usage  # (n_exp,)
+        
+        if self.moe_bias_momentum_enabled:
+            # Update momentum buffer (EMA of gradients)
+            self.bias_momentum_buffer = (self.moe_bias_momentum * self.bias_momentum_buffer + 
+                                        (1 - self.moe_bias_momentum) * gradient)
+            # Apply smoothed gradient
+            self.bias.data -= lr_bias * self.bias_momentum_buffer
+        else:
+            # Direct gradient update (original behavior)
+            self.bias.data -= lr_bias * gradient
 
 class Block(nn.Module):
 
@@ -213,9 +278,15 @@ class Block(nn.Module):
     def forward(self, x):
         x = x + self.attn(self.ln_1(x))
         if self.use_moe:
-            mlp_out, mask = self.mlp(self.ln_2(x))
-            x = x + mlp_out
-            return x, mask
+            mlp_result = self.mlp(self.ln_2(x))
+            if len(mlp_result) == 3:  # aux_loss method returns gate logits
+                mlp_out, mask, gate_logits = mlp_result
+                x = x + mlp_out
+                return x, mask, gate_logits
+            else:  # bias method
+                mlp_out, mask = mlp_result
+                x = x + mlp_out
+                return x, mask
         else:
             x = x + self.mlp(self.ln_2(x))
             return x
@@ -240,7 +311,11 @@ class GPTConfig:
     num_exp: int = 1 # Number of experts (set to 1 to disable MOE)
     num_act: int = 1 # Number of active experts (top-k)
     moe_tau: float = 1.0 # Temperature for router softmax
-    moe_bias_lr: float = 1e-2 # Learning rate for router bias updates
+    moe_bias_lr: float = 1e-2 # Learning rate for router bias updates (only used with bias method)
+    moe_bias_momentum: float = 0.9 # EMA decay factor for bias gradient momentum (only used with bias method)
+    moe_bias_momentum_enabled: bool = True # Enable momentum for router bias updates (only used with bias method)
+    moe_load_balance_method: str = "bias" # "bias" or "aux_loss" - method for load balancing
+    moe_aux_loss_weight: float = 0.01 # Auxiliary loss coefficient (only used with aux_loss method)
     alpha: float = 4.0 # Hidden layer size multiplier (hidden_size = alpha * n_embd)
 
 class GPT(nn.Module):
@@ -330,10 +405,17 @@ class GPT(nn.Module):
             x *= self.config.mup_input_alpha
             ### End muP code ###
         expert_masks = []
+        gate_logits_list = []
         for block in self.transformer.h:
             if block.use_moe:
-                x, mask = block(x)
-                expert_masks.append(mask)
+                block_result = block(x)
+                if len(block_result) == 3:  # aux_loss method
+                    x, mask, gate_logits = block_result
+                    expert_masks.append(mask)
+                    gate_logits_list.append(gate_logits)
+                else:  # bias method
+                    x, mask = block_result
+                    expert_masks.append(mask)
             else:
                 x = block(x)
         x = self.transformer.ln_f(x)
@@ -346,7 +428,21 @@ class GPT(nn.Module):
                 x *= self.config.mup_output_alpha / self.config.mup_width_multiplier
                 ### End muP code ###
             logits = self.lm_head(x)
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+            ce_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+            
+            # Add auxiliary loss if using aux_loss method
+            if self.config.moe_load_balance_method == "aux_loss" and gate_logits_list:
+                aux_loss = load_balancing_loss_func(
+                    gate_logits=tuple(gate_logits_list),
+                    num_experts=self.config.num_exp,
+                    top_k=self.config.num_act
+                )
+                total_loss = ce_loss + self.config.moe_aux_loss_weight * aux_loss
+                # Return tuple of (total_loss, ce_loss, aux_loss) for aux_loss method
+                loss = (total_loss, ce_loss, aux_loss)
+            else:
+                # For bias method or no MOE, just return the cross-entropy loss
+                loss = ce_loss
         else:
             # inference-time mini-optimization: only forward the lm_head on the very last position
             logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
@@ -457,8 +553,11 @@ class GPT(nn.Module):
                     # Router parameters get special treatment
                     router_param_list.append((n, p))
                 elif n in router_biases:
-                    # Router biases are excluded from optimizer (updated manually)
-                    continue
+                    # Router biases: include in optimizer for aux_loss, exclude for bias method
+                    if self.config.moe_load_balance_method == "aux_loss":
+                        nodecay_params.append(p)  # Router bias is a bias parameter (no weight decay)
+                    else:
+                        continue  # Skip router biases for bias method (updated manually)
                 elif p.dim() >= 2:
                     
                     if n.endswith('c_attn.weight') or n.endswith('c_fc.weight') or n.endswith('c_proj.weight'):
@@ -505,7 +604,11 @@ class GPT(nn.Module):
                 if n in router_params:
                     router_param_list.append((n, p))
                 elif n in router_biases:
-                    continue  # Exclude router biases
+                    # Router biases: include in optimizer for aux_loss, exclude for bias method
+                    if self.config.moe_load_balance_method == "aux_loss":
+                        nodecay_params.append(p)  # Router bias is a bias parameter (no weight decay)
+                    else:
+                        continue  # Skip router biases for bias method (updated manually)
                 elif p.dim() >= 2:
                     decay_params.append(p)
                 else:

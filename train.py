@@ -90,7 +90,11 @@ mup_enable_coord_check_logging = False # If True will track the output.abs().mea
 num_exp = 1 # Number of experts (set to 1 to disable MOE)
 num_act = 1 # Number of active experts (top-k)
 moe_tau = 1.0 # Temperature for router softmax
-moe_bias_lr = 1e-2 # Learning rate for router bias updates
+moe_bias_lr = 1e-2 # Learning rate for router bias updates (only used with bias method)
+moe_bias_momentum = 0.9 # EMA decay factor for bias gradient momentum (only used with bias method)
+moe_bias_momentum_enabled = True # Enable momentum for router bias updates (only used with bias method)
+moe_load_balance_method = "bias" # "bias" or "aux_loss" - method for load balancing  
+moe_aux_loss_weight = 0.01 # Auxiliary loss coefficient (only used with aux_loss method)
 alpha = 4.0 # Hidden layer size multiplier (hidden_size = alpha * n_embd)
 # seed
 seed = 1337
@@ -180,7 +184,9 @@ model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=bloc
                   mup_disable_hidden_lr_scaling=mup_disable_hidden_lr_scaling,
                   mup_width_multiplier=mup_width_multiplier, mup_input_alpha=mup_input_alpha,
                   mup_output_alpha=mup_output_alpha, num_exp=num_exp, num_act=num_act,
-                  moe_tau=moe_tau, moe_bias_lr=moe_bias_lr, alpha=alpha) # start with model_args from command line
+                  moe_tau=moe_tau, moe_bias_lr=moe_bias_lr, moe_bias_momentum=moe_bias_momentum,
+                  moe_bias_momentum_enabled=moe_bias_momentum_enabled, moe_load_balance_method=moe_load_balance_method,
+                  moe_aux_loss_weight=moe_aux_loss_weight, alpha=alpha) # start with model_args from command line
 
 if init_from == 'scratch':
     # init a new model from scratch
@@ -395,11 +401,20 @@ while True:
             model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1)
         with ctx:
             logits, loss = model(X, Y)
-            loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation
+            # Handle both single loss and tuple (total, ce, aux) formats
+            if isinstance(loss, tuple):
+                # aux_loss method returns (total_loss, ce_loss, aux_loss)
+                total_loss, ce_loss, aux_loss = loss
+                loss_for_backward = total_loss / gradient_accumulation_steps
+            else:
+                # bias method or no MOE returns single loss
+                ce_loss = loss  # Store original unscaled loss for logging
+                loss_for_backward = loss / gradient_accumulation_steps
+                aux_loss = None
         # immediately async prefetch next batch while model is doing the forward pass on the GPU
         X, Y = get_batch('train')
         # backward pass, with gradient scaling if training in fp16
-        scaler.scale(loss).backward()
+        scaler.scale(loss_for_backward).backward()
     # clip the gradient
     if grad_clip != 0.0:
         scaler.unscale_(optimizer)
@@ -412,27 +427,30 @@ while True:
     
     # Update router biases for MOE layers and collect stats for tqdm
     moe_layer_stats = []
-    if num_exp > 1:  # Update biases every iteration
+    if num_exp > 1:
         with torch.no_grad():
             for i, block in enumerate(raw_model.transformer.h):
                 if hasattr(block, 'use_moe') and block.use_moe:
-                    # Collect masks from recent forward passes
                     mlp_moe = block.mlp
                     if mlp_moe.total_tokens > 0:
-                        #print(f"total_tokens={mlp_moe.total_tokens}")
                         # Calculate average usage per expert
                         avg_usage = mlp_moe.tokens_per_expert / mlp_moe.total_tokens
                         target_usage = mlp_moe.num_act / mlp_moe.n_exp
                         # Store detailed stats for each layer
+                        momentum_values = mlp_moe.bias_momentum_buffer.tolist() if mlp_moe.moe_bias_momentum_enabled else None
                         moe_layer_stats.append({
                             'layer': i,
                             'usage': [f'{u:.3f}' for u in avg_usage.tolist()],
                             'bias': [f'{b:.3f}' for b in mlp_moe.bias.tolist()],
+                            'momentum': [f'{m:.3f}' for m in momentum_values] if momentum_values else None,
                             'target': target_usage
                         })
-                        # Update bias
-                        mlp_moe.bias.data -= moe_bias_lr * (avg_usage - target_usage)
-                        # Reset counters
+                        
+                        # Update bias only if using bias method
+                        if moe_load_balance_method == "bias":
+                            mlp_moe.update_router_bias(avg_usage, target_usage, moe_bias_lr)
+                        
+                        # Always reset counters for next iteration (both methods need fresh stats)
                         mlp_moe.tokens_per_expert.zero_()
                         mlp_moe.total_tokens.zero_()
 
@@ -448,17 +466,33 @@ while True:
         if iter_num % log_interval == 0:
             # get loss as float. note: this is a CPU-GPU sync point
             # scale up to undo the division above, approximating the true total loss (exact would have been a sum)
-            lossf = loss.item() * gradient_accumulation_steps
+            if aux_loss is not None:
+                # For aux_loss method, show both losses
+                ce_lossf = ce_loss.item() #* gradient_accumulation_steps
+                aux_lossf = aux_loss.item()  # aux_loss is not scaled by gradient accumulation
+                total_lossf = (ce_loss.item() + moe_aux_loss_weight * aux_loss.item()) #* gradient_accumulation_steps
+            else:
+                # For bias method or no MOE
+                lossf = ce_loss.item() #* gradient_accumulation_steps
+            
             if local_iter_num >= 5: # let the training loop settle a bit
                 mfu = raw_model.estimate_mfu(batch_size * gradient_accumulation_steps, dt)
                 running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
             
             # Build main progress line
-            main_postfix = {
-                'loss': f'{lossf:.4f}',
-                'time': f'{dt*1000:.1f}ms',
-                'mfu': f'{running_mfu*100:.1f}%'
-            }
+            if aux_loss is not None:
+                main_postfix = {
+                    'train_loss': f'{ce_lossf:.4f}',
+                    'aux_loss': f'{aux_lossf:.4f}',
+                    'time': f'{dt*1000:.1f}ms',
+                    'mfu': f'{running_mfu*100:.1f}%'
+                }
+            else:
+                main_postfix = {
+                    'loss': f'{lossf:.4f}',
+                    'time': f'{dt*1000:.1f}ms',
+                    'mfu': f'{running_mfu*100:.1f}%'
+                }
             pbar.set_postfix(main_postfix)
             
             # Update MOE layer progress bars in place
@@ -468,7 +502,11 @@ while True:
                     if layer_idx < len(moe_pbars):
                         usage_str = ','.join(stats['usage'])
                         bias_str = ','.join(stats['bias'])
-                        layer_desc = f"L{layer_idx}: usage[{usage_str}] bias[{bias_str}] target={stats['target']:.3f}"
+                        if stats['momentum'] and moe_bias_momentum_enabled:
+                            momentum_str = ','.join(stats['momentum'])
+                            layer_desc = f"L{layer_idx}: usage[{usage_str}] bias[{bias_str}] mom[{momentum_str}]"
+                        else:
+                            layer_desc = f"L{layer_idx}: usage[{usage_str}] bias[{bias_str}] target={stats['target']:.3f}"
                         moe_pbars[layer_idx].set_description(layer_desc)
     iter_num += 1
     local_iter_num += 1
