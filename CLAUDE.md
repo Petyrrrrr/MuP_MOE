@@ -1,7 +1,7 @@
 # Claude Instructions
 
 ## Project Overview
-This is a nanoGPT implementation with muP (maximal update parametrization) support.
+This is a nanoGPT implementation with muP (maximal update parametrization) support. The main focus is to test Mixture of Experts (MoE) with muP.
 
 ## Important Files
 - `model.py` - Main model implementation
