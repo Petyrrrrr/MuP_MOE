@@ -326,7 +326,7 @@ while True:
     lr = get_lr(iter_num) if decay_lr else learning_rate
     for param_group in optimizer.param_groups:
         if param_group.get('is_router', False):
-            param_group['lr'] = lr
+            param_group['lr'] = lr / math.sqrt(n_embd)
         else:
             param_group['lr'] = lr * param_group.get('lr_scale', 1.0)
 
