@@ -30,7 +30,7 @@ foreach ($width in $widths) {
                     --csv_log=True `
                     --dataset='shakespeare_char' `
                     --gradient_accumulation_steps=$((8 * $num_exp)) `
-                    --batch_size=64 `
+                    --batch_size=128 `
                     --block_size=1024 `
                     --n_layer=4 `
                     --n_head=$n_heads `
@@ -53,14 +53,14 @@ foreach ($width in $widths) {
                     --num_act=$num_act `
                     --moe_tau=1.0 `
                     --moe_bias_lr=1e-2 `
-                    --moe_bias_momentum=0.5 `
+                    --moe_bias_momentum=0.9 `
                     --moe_bias_momentum_enabled=True `
                     --moe_load_balance_method='bias' `
-                    --moe_aux_loss_weight=1.0 `
+                    --moe_aux_loss_weight=0.01 `
                     --seed=$seed `
                     --backend='nccl' `
                     --device='cuda' `
-                    --dtype='float16' `
+                    --dtype='bfloat16' `
                     --compile=False
             }
         }

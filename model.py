@@ -413,6 +413,12 @@ class GPT(nn.Module):
                     x, mask, gate_logits = block_result
                     expert_masks.append(mask)
                     gate_logits_list.append(gate_logits)
+                    # Monitor gate logits for extreme values
+                    if gate_logits is not None:
+                        gate_max = gate_logits.max().item()
+                        gate_min = gate_logits.min().item()
+                        if abs(gate_max) > 20 or abs(gate_min) > 20:
+                            print(f"WARNING: Gate logits extreme: [{gate_min:.2f}, {gate_max:.2f}]")
                 else:  # bias method
                     x, mask = block_result
                     expert_masks.append(mask)

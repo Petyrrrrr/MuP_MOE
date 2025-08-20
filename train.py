@@ -406,6 +406,13 @@ while True:
                 # aux_loss method returns (total_loss, ce_loss, aux_loss)
                 total_loss, ce_loss, aux_loss = loss
                 loss_for_backward = total_loss / gradient_accumulation_steps
+                # Monitor loss components
+                if master_process and (iter_num % log_interval == 0):
+                    print(f"CE loss: {ce_loss.item():.6f}, Aux loss: {aux_loss.item():.6f}")
+                    if torch.isnan(aux_loss) or torch.isinf(aux_loss):
+                        print("WARNING: Aux loss is NaN/Inf!")
+                    if aux_loss.item() > 10 * ce_loss.item():
+                        print("WARNING: Aux loss dominates CE loss!")
             else:
                 # bias method or no MOE returns single loss
                 ce_loss = loss  # Store original unscaled loss for logging
@@ -418,7 +425,14 @@ while True:
     # clip the gradient
     if grad_clip != 0.0:
         scaler.unscale_(optimizer)
-        torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+        total_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+        # Monitor gradient norm
+        if master_process and (iter_num % log_interval == 0):
+            print(f"Grad norm: {total_norm:.6f}")
+            if torch.isnan(total_norm):
+                print("WARNING: Gradient norm is NaN!")
+            if total_norm > grad_clip * 2:
+                print(f"WARNING: Large gradient norm {total_norm:.2f} (clip={grad_clip})")
     # step the optimizer and scaler if training in fp16
     scaler.step(optimizer)
     scaler.update()
