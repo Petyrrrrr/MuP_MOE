@@ -1,11 +1,23 @@
 #!/bin/bash
 # muP hyperparameter transfer with MOE - Bash version
+# Multi-GPU support: set NGPUS environment variable (default: 1)
+# Usage: NGPUS=4 ./run.sh
 
-for width in 128
+NGPUS=${NGPUS:-1}
+if [ $NGPUS -gt 1 ]; then
+    echo "Running with $NGPUS GPUs using torchrun"
+    LAUNCHER="torchrun --standalone --nproc_per_node=$NGPUS"
+    # Note: gradient_accumulation_steps is automatically adjusted by train.py for DDP
+else
+    echo "Running on single GPU"
+    LAUNCHER="python3"
+fi
+
+for width in 512
 do
-    for num_exp in 4 2
+    for num_exp in 8 4 2
     do
-        for lr in 0.125 0.03125 0.0078125 0.001953125 0.00048828125 0.0001220703125
+        for lr in 0.0625 0.03125 0.015625 0.0078125 0.00390625 0.001953125 0.0009765625 0.00048828125 0.000244140625
         do
             for seed in 1
             do
@@ -13,9 +25,9 @@ do
                 n_heads=$((width / head_size))
                 mup_base_width=256
                 mup_width_multiplier=$(echo "scale=8; $width/$mup_base_width" | bc -l)
-                num_act=$((num_exp / 2))  # top-k experts
+                num_act=1  # top-k experts
                 out_dir="mup_examples/mutransfer_lr_shakespeare_char/mup_moe/out/width${width}_depth2_experts${num_exp}_active${num_act}_seed${seed}_lr${lr}"
-                python3 train.py \
+                $LAUNCHER train.py \
                     --out_dir=$out_dir \
                     --eval_interval=1 \
                     --log_interval=1 \
@@ -60,7 +72,7 @@ do
                     --backend='nccl' \
                     --device='cuda' \
                     --dtype='float16' \
-                    --compile=False
+                    --compile=True
             done
         done
     done

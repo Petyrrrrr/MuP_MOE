@@ -251,7 +251,9 @@ if compile:
 
 # wrap model into DDP container
 if ddp:
-    model = DDP(model, device_ids=[ddp_local_rank])
+    # For MoE models, enable find_unused_parameters since not all experts are used for each token
+    find_unused = num_exp > 1
+    model = DDP(model, device_ids=[ddp_local_rank], find_unused_parameters=find_unused)
 
 # helps estimate an arbitrarily accurate loss over either split using many batches
 @torch.no_grad()
@@ -323,7 +325,8 @@ if master_process:
 while True:
 
     # determine and set the learning rate for this iteration
-    lr = get_lr(iter_num) if decay_lr else learning_rate
+    # LR scheduler disabled - use constant learning rate
+    lr = learning_rate
     for param_group in optimizer.param_groups:
         if param_group.get('is_router', False):
             param_group['lr'] = lr / math.sqrt(n_embd)
@@ -533,6 +536,93 @@ while True:
     if iter_num > max_iters:
         print(f"max_iters={max_iters} reached\n" + "\n" * n_layer)
         
+        # Perform final validation sweep before ending training
+        if master_process:
+            print("Performing final validation sweep...")
+            # Temporarily force validation loss computation for final sweep
+            original_skip_val_loss = skip_val_loss
+            globals()['skip_val_loss'] = False  # Force validation computation
+            losses = estimate_loss()
+            globals()['skip_val_loss'] = original_skip_val_loss  # Restore original setting
+            if not np.isnan(losses['train']):  # Only log if not NaN
+                log_dict = {
+                    "iter": iter_num,
+                    "train/loss": losses['train'],
+                    "val/loss": losses['val'],
+                    "lr": lr,
+                    "mfu": running_mfu*100, # convert to percentage
+                }
+                if mup_enable_coord_check_logging and coord_check_dict is not None:
+                    for key in coord_check_dict:
+                        log_dict[key + '_act_abs_mean'] = np.mean(coord_check_dict[key])
+                if wandb_log:
+                    wandb_run.log(log_dict)
+                if csv_log:
+                    csv_logger.log(log_dict)
+                    csv_logger.step()
+                    csv_logger.close()  # Ensure final row is written
+                print(f"Final validation - step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+                
+                # Collect and print validation set MOE expert usage statistics
+                if num_exp > 1:
+                    print("\nCollecting expert usage on validation set...")
+                    
+                    # Reset all counters before validation pass
+                    with torch.no_grad():
+                        for block in raw_model.transformer.h:
+                            if hasattr(block, 'use_moe') and block.use_moe:
+                                block.mlp.tokens_per_expert.zero_()
+                                block.mlp.total_tokens.zero_()
+                    
+                    # Run validation batches with token counting enabled
+                    model.eval()
+                    val_losses = []
+                    for k in range(eval_iters):
+                        X, Y = get_batch('val')
+                        with ctx:
+                            # Temporarily enable token counting during validation
+                            for block in raw_model.transformer.h:
+                                if hasattr(block, 'use_moe') and block.use_moe:
+                                    mlp_moe = block.mlp
+                                    # Temporarily set training=True just for token counting
+                                    original_training = mlp_moe.training
+                                    mlp_moe.training = True
+                            
+                            logits, loss = model(X, Y)
+                            
+                            # Restore original training mode
+                            for block in raw_model.transformer.h:
+                                if hasattr(block, 'use_moe') and block.use_moe:
+                                    mlp_moe = block.mlp
+                                    mlp_moe.training = original_training
+                            
+                            val_losses.append(loss.item() if not isinstance(loss, tuple) else loss[0].item())
+                    
+                    model.train()
+                    
+                    # Print validation set expert usage statistics
+                    print("\nValidation set expert usage statistics:")
+                    with torch.no_grad():
+                        for i, block in enumerate(raw_model.transformer.h):
+                            if hasattr(block, 'use_moe') and block.use_moe:
+                                mlp_moe = block.mlp
+                                if mlp_moe.total_tokens > 0:
+                                    # Calculate average usage per expert
+                                    avg_usage = mlp_moe.tokens_per_expert / mlp_moe.total_tokens
+                                    target_usage = mlp_moe.num_act / mlp_moe.n_exp
+                                    
+                                    # Format the output similar to tqdm display
+                                    usage_str = ','.join([f'{u:.3f}' for u in avg_usage.tolist()])
+                                    bias_str = ','.join([f'{b:.3f}' for b in mlp_moe.bias.tolist()])
+                                    if mlp_moe.moe_bias_momentum_enabled and hasattr(mlp_moe, 'bias_momentum_buffer'):
+                                        momentum_str = ','.join([f'{m:.3f}' for m in mlp_moe.bias_momentum_buffer.tolist()])
+                                        print(f"L{i}: usage[{usage_str}] bias[{bias_str}] mom[{momentum_str}]")
+                                    else:
+                                        print(f"L{i}: usage[{usage_str}] bias[{bias_str}] target={target_usage:.3f}")
+                                    
+                                    # Reset counters after printing
+                                    mlp_moe.tokens_per_expert.zero_()
+                                    mlp_moe.total_tokens.zero_()
         break
 
 # Close progress bars
