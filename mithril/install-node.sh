@@ -117,3 +117,6 @@ echo
 echo "✅ Done."
 echo "Node: $(node -v)"
 echo "npm:  $(npm -v)"
+
+
+sudo npm install -g @anthropic-ai/claude-code
