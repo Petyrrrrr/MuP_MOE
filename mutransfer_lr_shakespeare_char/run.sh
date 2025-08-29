@@ -28,7 +28,7 @@ do
                 mup_base_width=256
                 mup_width_multiplier=$(python -c "print($width/$mup_base_width)")
                 num_act=$((num_exp/2)) 
-                out_dir="run_data/mutransfer_lr_shakespeare_char/mup_moe/out_${timestamp}/width${width}_depth2_experts${num_exp}_active${num_act}_seed${seed}_lr${lr}"
+                out_dir="run_data/mutransfer_lr_shakespeare_char/out_${timestamp}/width${width}_depth2_experts${num_exp}_active${num_act}_seed${seed}_lr${lr}"
                 $LAUNCHER train.py \
                     --out_dir=$out_dir \
                     --eval_interval=1 \
@@ -52,11 +52,12 @@ do
                     --bias=False \
                     --init_std=0.02 \
                     --learning_rate=$lr \
+                    --min_lr=$lr
                     --max_iters=300 \
                     --weight_decay=0.0 \
                     --beta1=0.9 \
                     --beta2=0.95 \
-                    --grad_clip=1.0 \
+                    --grad_clip=3.0 \
                     --decay_lr=False \
                     --mup_enabled=True \
                     --mup_width_multiplier=$mup_width_multiplier \
