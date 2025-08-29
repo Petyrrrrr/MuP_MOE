@@ -13,22 +13,25 @@ else
     LAUNCHER="python3"
 fi
 
+LAUNCHER="python3"
+
 timestamp=$(python -c "from datetime import datetime; print(datetime.now().strftime('%Y%m%d_%H%M%S'))")
 
 for width in 512
 do
-    for num_exp in 8 4 2
+    for num_exp in 16 8 4 2
     do
-        for lr in 0.0625 0.03125 0.015625 0.0078125 0.00390625 0.001953125 0.0009765625 0.00048828125 0.000244140625
+        for lr in 0.0625 0.03125 0.015625 0.0078125 0.00390625 0.001953125 0.0009765625 0.00048828125 0.000244140625 0.0001220703125
         do
             for seed in 1
             do
+                depth = 4
                 head_size=64
                 n_heads=$((width / head_size))
                 mup_base_width=256
                 mup_width_multiplier=$(python -c "print($width/$mup_base_width)")
                 num_act=$((num_exp/2)) 
-                out_dir="run_data/mutransfer_lr_shakespeare_char/out_${timestamp}/width${width}_depth2_experts${num_exp}_active${num_act}_seed${seed}_lr${lr}"
+                out_dir="run_data/mutransfer_lr_shakespeare_char/out_${timestamp}/width${width}_depth${depth}_experts${num_exp}_active${num_act}_seed${seed}_lr${lr}"
                 $LAUNCHER train.py \
                     --out_dir=$out_dir \
                     --eval_interval=1 \
@@ -41,18 +44,19 @@ do
                     --init_from='scratch' \
                     --wandb_log=False \
                     --csv_log=True \
+                    --warmup_iters=300 \
                     --dataset='shakespeare_char' \
-                    --gradient_accumulation_steps=8 \
+                    --gradient_accumulation_steps=1 \
                     --batch_size=64 \
                     --block_size=1024 \
-                    --n_layer=4 \
+                    --n_layer=$depth \
                     --n_head=$n_heads \
                     --n_embd=$width \
                     --dropout=0.0 \
                     --bias=False \
                     --init_std=0.02 \
                     --learning_rate=$lr \
-                    --min_lr=$lr
+                    --min_lr=$lr \
                     --max_iters=300 \
                     --weight_decay=0.0 \
                     --beta1=0.9 \
@@ -66,8 +70,8 @@ do
                     --num_exp=$num_exp \
                     --num_act=$num_act \
                     --moe_tau=1.0 \
-                    --moe_bias_lr=1e-2 \
-                    --moe_bias_momentum=0.5 \
+                    --moe_bias_lr=$lr \
+                    --moe_bias_momentum=0.9 \
                     --moe_bias_momentum_enabled=True \
                     --moe_load_balance_method='bias' \
                     --moe_aux_loss_weight=1.0 \
@@ -75,7 +79,7 @@ do
                     --backend='nccl' \
                     --device='cuda' \
                     --dtype='float16' \
-                    --compile=True
+                    --compile=False
             done
         done
     done

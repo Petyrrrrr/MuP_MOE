@@ -233,7 +233,7 @@ class Trainer:
         while True:
             # determine and set the learning rate for this iteration
             # LR scheduler disabled - use constant learning rate
-            lr = self.learning_rate
+            lr = get_lr_fn(iter_num)
             for param_group in self.optimizer.param_groups:
                 if param_group.get('is_router', False):
                     param_group['lr'] = lr / math.sqrt(self.n_embd)

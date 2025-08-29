@@ -11,3 +11,5 @@ input.txt
 env/
 venv/
 run_data/*
+mutransfer_lr_shakespeare_char/plots/*
+mutransfer_lr_owt/run_data/*
