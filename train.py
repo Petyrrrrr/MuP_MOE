@@ -34,6 +34,8 @@ from tqdm import tqdm
 warnings.filterwarnings("ignore", message=".*cuDNN SDPA backward.*", category=UserWarning)
 
 from model import GPTConfig, GPT
+from utils import get_batch, estimate_loss, get_lr
+from trainer import Trainer
 
 # -----------------------------------------------------------------------------
 # default config values designed to train a gpt2 (124M) on OpenWebText
@@ -145,24 +147,8 @@ device_type = 'cuda' if 'cuda' in device else 'cpu' # for later use in torch.aut
 ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[dtype]
 ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
 
-# poor man's data loader
+# data directory for the data loader
 data_dir = os.path.join('data', dataset)
-def get_batch(split):
-    # We recreate np.memmap every batch to avoid a memory leak, as per
-    # https://stackoverflow.com/questions/45132940/numpy-memmap-memory-usage-want-to-iterate-once/61472122#61472122
-    if split == 'train':
-        data = np.memmap(os.path.join(data_dir, 'train.bin'), dtype=np.uint16, mode='r')
-    else:
-        data = np.memmap(os.path.join(data_dir, 'val.bin'), dtype=np.uint16, mode='r')
-    ix = torch.randint(len(data) - block_size, (batch_size,))
-    x = torch.stack([torch.from_numpy((data[i:i+block_size]).astype(np.int64)) for i in ix])
-    y = torch.stack([torch.from_numpy((data[i+1:i+1+block_size]).astype(np.int64)) for i in ix])
-    if device_type == 'cuda':
-        # pin arrays x,y, which allows us to move them to GPU asynchronously (non_blocking=True)
-        x, y = x.pin_memory().to(device, non_blocking=True), y.pin_memory().to(device, non_blocking=True)
-    else:
-        x, y = x.to(device), y.to(device)
-    return x, y
 
 # init these up here, can override if init_from='resume' (i.e. from a checkpoint)
 iter_num = 0
@@ -255,40 +241,23 @@ if ddp:
     find_unused = num_exp > 1
     model = DDP(model, device_ids=[ddp_local_rank], find_unused_parameters=find_unused)
 
-# helps estimate an arbitrarily accurate loss over either split using many batches
-@torch.no_grad()
-def estimate_loss():
-    out = {}
-    model.eval()
-    splits = ['train'] if skip_val_loss else ['train', 'val']
-    for split in splits:
-        losses = torch.zeros(eval_iters)
-        for k in range(eval_iters):
-            X, Y = get_batch(split)
-            with ctx:
-                logits, loss = model(X, Y)
-            losses[k] = loss.item()
-        out[split] = losses.mean().item()
-    if skip_val_loss:
-        out['val'] = -1
-    model.train()
-    return out
+# Create wrapper functions with closure over globals for the trainer
+def get_batch_wrapper(split):
+    return get_batch(split, data_dir, block_size, batch_size, device_type, device)
 
-# learning rate decay scheduler (cosine with warmup)
-def get_lr(it):
-    # 1) linear warmup for warmup_iters steps
-    if it < warmup_iters:
-        return learning_rate * it / warmup_iters
-    # 2) if it > lr_decay_iters, return min learning rate
-    if it > lr_decay_iters:
-        return min_lr
-    # 3) in between, use cosine decay down to min learning rate
-    decay_ratio = (it - warmup_iters) / (lr_decay_iters - warmup_iters)
-    assert 0 <= decay_ratio <= 1
-    coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coeff ranges 0..1
-    return min_lr + coeff * (learning_rate - min_lr)
+def estimate_loss_wrapper(override_skip_val=None, collect_moe_stats=False):
+    # Allow overriding skip_val_loss for final validation sweep
+    skip_val = override_skip_val if override_skip_val is not None else skip_val_loss
+    # Get raw model for MOE stats collection
+    raw_model = model.module if ddp else model
+    return estimate_loss(model, eval_iters, skip_val, get_batch_wrapper, ctx, collect_moe_stats, raw_model)
+
+def get_lr_wrapper(it):
+    return get_lr(it, learning_rate, warmup_iters, lr_decay_iters, min_lr)
 
 # logging
+wandb_run = None
+csv_logger = None
 if master_process:
     if wandb_log:
         import wandb
@@ -299,337 +268,34 @@ if master_process:
             pass
         csv_logger = CSVLogWrapper(log, config=config, out_dir=out_dir, flush_every=flush_every)
 
-# training loop
-X, Y = get_batch('train') # fetch the very first batch
-t0 = time.time()
-local_iter_num = 0 # number of iterations in the lifetime of this process
-raw_model = model.module if ddp else model # unwrap DDP container if needed
-running_mfu = -1.0
-coord_check_dict = None
+# Initialize trainer
+ddp_settings = {'ddp': ddp, 'ddp_local_rank': ddp_local_rank if ddp else None,
+                'ddp_world_size': ddp_world_size} if ddp else None
 
-# Initialize tqdm progress bar (only on master process)
-pbar = None
-moe_pbars = []
-if master_process:
-    pbar = tqdm(initial=iter_num, total=max_iters, desc="Training", 
-                unit="iter", dynamic_ncols=True, position=0)
-    
-    # Create separate progress bars for each MOE layer if MOE is enabled
-    if num_exp > 1:
-        for i in range(n_layer):
-            layer_pbar = tqdm(total=0, desc=f"L{i}: Initializing...", 
-                            unit="", leave=False, position=i+1, 
-                            bar_format='{desc}')
-            moe_pbars.append(layer_pbar)
+# Store additional config values needed by trainer
+config['iter_num'] = iter_num
+config['best_val_loss'] = best_val_loss
+config['model_args'] = model_args
+config['wandb_run'] = wandb_run
+config['csv_logger'] = csv_logger
+config['batch_size'] = batch_size  # Add batch_size to config for MFU calculation
 
-while True:
+trainer = Trainer(
+    model=model,
+    optimizer=optimizer,
+    config=config,
+    device=device,
+    master_process=master_process,
+    ddp_settings=ddp_settings
+)
 
-    # determine and set the learning rate for this iteration
-    # LR scheduler disabled - use constant learning rate
-    lr = learning_rate
-    for param_group in optimizer.param_groups:
-        if param_group.get('is_router', False):
-            param_group['lr'] = lr / math.sqrt(n_embd)
-        else:
-            param_group['lr'] = lr * param_group.get('lr_scale', 1.0)
+# Run training
+trainer.run_training_loop(
+    get_batch_fn=get_batch_wrapper,
+    estimate_loss_fn=estimate_loss_wrapper,
+    get_lr_fn=get_lr_wrapper
+)
 
-    # evaluate the loss on train/val sets and write checkpoints
-    if iter_num % eval_interval == 0 and master_process:
-        losses = estimate_loss()
-        if np.isnan(losses['train']):
-            raise Exception('NaN loss')
-     #   print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
-        log_dict = {
-            "iter": iter_num,
-            "train/loss": losses['train'],
-            "val/loss": losses['val'],
-            "lr": lr,
-            "mfu": running_mfu*100, # convert to percentage
-        }
-        if mup_enable_coord_check_logging and coord_check_dict is not None:
-            for key in coord_check_dict:
-                log_dict[key + '_act_abs_mean'] = np.mean(coord_check_dict[key])
-        if wandb_log:
-            wandb_run.log(log_dict)
-        if csv_log:
-            csv_logger.log(log_dict)
-            csv_logger.step()
-        if (not never_save_checkpoint) and (losses['val'] < best_val_loss or always_save_checkpoint):
-            best_val_loss = losses['val']
-            if iter_num > 0:
-                checkpoint = {
-                    'model': raw_model.state_dict(),
-                    'optimizer': optimizer.state_dict(),
-                    'model_args': model_args,
-                    'iter_num': iter_num,
-                    'best_val_loss': best_val_loss,
-                    'config': config,
-                }
-                print(f"saving checkpoint to {out_dir}")
-                torch.save(checkpoint, os.path.join(out_dir, 'ckpt.pt'))
-    if iter_num == 0 and eval_only:
-        break
-
-    if mup_enable_coord_check_logging:
-        coord_check_dict = {
-            'token_embedding': [],
-            'attn': [],
-            'mlp': [],
-            'lm_head': [],
-        }
-        def hook(module, input, output, key):
-            with torch.no_grad():
-                coord_check_dict[key].append(output.abs().mean().item())
-        coord_check_handles = []
-        for module_name, module in model.named_modules():
-            if module_name == 'transformer.wte':
-                coord_check_handles.append(module.register_forward_hook(partial(hook, key='token_embedding')))
-            elif module_name.endswith('.attn'):
-                coord_check_handles.append(module.register_forward_hook(partial(hook, key='attn')))
-            elif module_name.endswith('.mlp'):
-                coord_check_handles.append(module.register_forward_hook(partial(hook, key='mlp')))
-            elif module_name == 'lm_head':
-                coord_check_handles.append(module.register_forward_hook(partial(hook, key='lm_head')))
-    else:
-        coord_check_dict = None
-
-    # forward backward update, with optional gradient accumulation to simulate larger batch size
-    # and using the GradScaler if data type is float16
-    for micro_step in range(gradient_accumulation_steps):
-        if ddp:
-            # in DDP training we only need to sync gradients at the last micro step.
-            # the official way to do this is with model.no_sync() context manager, but
-            # I really dislike that this bloats the code and forces us to repeat code
-            # looking at the source of that context manager, it just toggles this variable
-            model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1)
-        with ctx:
-            logits, loss = model(X, Y)
-            # Handle both single loss and tuple (total, ce, aux) formats
-            if isinstance(loss, tuple):
-                # aux_loss method returns (total_loss, ce_loss, aux_loss)
-                total_loss, ce_loss, aux_loss = loss
-                loss_for_backward = total_loss / gradient_accumulation_steps
-                # Monitor loss components
-                if master_process and (iter_num % log_interval == 0):
-                    print(f"CE loss: {ce_loss.item():.6f}, Aux loss: {aux_loss.item():.6f}")
-                    if torch.isnan(aux_loss) or torch.isinf(aux_loss):
-                        print("WARNING: Aux loss is NaN/Inf!")
-                    if aux_loss.item() > 10 * ce_loss.item():
-                        print("WARNING: Aux loss dominates CE loss!")
-            else:
-                # bias method or no MOE returns single loss
-                ce_loss = loss  # Store original unscaled loss for logging
-                loss_for_backward = loss / gradient_accumulation_steps
-                aux_loss = None
-        # immediately async prefetch next batch while model is doing the forward pass on the GPU
-        X, Y = get_batch('train')
-        # backward pass, with gradient scaling if training in fp16
-        scaler.scale(loss_for_backward).backward()
-    # clip the gradient
-    if grad_clip != 0.0:
-        scaler.unscale_(optimizer)
-        total_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-        # Monitor gradient norm
-        if master_process and (iter_num % log_interval == 0):
-            print(f"Grad norm: {total_norm:.6f}")
-            if torch.isnan(total_norm):
-                print("WARNING: Gradient norm is NaN!")
-            if total_norm > grad_clip * 2:
-                print(f"WARNING: Large gradient norm {total_norm:.2f} (clip={grad_clip})")
-    # step the optimizer and scaler if training in fp16
-    scaler.step(optimizer)
-    scaler.update()
-    # flush the gradients as soon as we can, no need for this memory anymore
-    optimizer.zero_grad(set_to_none=True)
-    
-    # Update router biases for MOE layers and collect stats for tqdm
-    moe_layer_stats = []
-    if num_exp > 1:
-        with torch.no_grad():
-            for i, block in enumerate(raw_model.transformer.h):
-                if hasattr(block, 'use_moe') and block.use_moe:
-                    mlp_moe = block.mlp
-                    if mlp_moe.total_tokens > 0:
-                        # Calculate average usage per expert
-                        avg_usage = mlp_moe.tokens_per_expert / mlp_moe.total_tokens
-                        target_usage = mlp_moe.num_act / mlp_moe.n_exp
-                        # Store detailed stats for each layer
-                        momentum_values = mlp_moe.bias_momentum_buffer.tolist() if mlp_moe.moe_bias_momentum_enabled else None
-                        moe_layer_stats.append({
-                            'layer': i,
-                            'usage': [f'{u:.3f}' for u in avg_usage.tolist()],
-                            'bias': [f'{b:.3f}' for b in mlp_moe.bias.tolist()],
-                            'momentum': [f'{m:.3f}' for m in momentum_values] if momentum_values else None,
-                            'target': target_usage
-                        })
-                        
-                        # Update bias only if using bias method
-                        if moe_load_balance_method == "bias":
-                            mlp_moe.update_router_bias(avg_usage, target_usage, moe_bias_lr)
-                        
-                        # Always reset counters for next iteration (both methods need fresh stats)
-                        mlp_moe.tokens_per_expert.zero_()
-                        mlp_moe.total_tokens.zero_()
-
-    # timing and logging
-    t1 = time.time()
-    dt = t1 - t0
-    t0 = t1
-    if master_process and pbar is not None:
-        # Update progress bar every iteration
-        pbar.update(1)
-        
-        # Update description with detailed info at log intervals
-        if iter_num % log_interval == 0:
-            # get loss as float. note: this is a CPU-GPU sync point
-            # scale up to undo the division above, approximating the true total loss (exact would have been a sum)
-            if aux_loss is not None:
-                # For aux_loss method, show both losses
-                ce_lossf = ce_loss.item() #* gradient_accumulation_steps
-                aux_lossf = aux_loss.item()  # aux_loss is not scaled by gradient accumulation
-                total_lossf = (ce_loss.item() + moe_aux_loss_weight * aux_loss.item()) #* gradient_accumulation_steps
-            else:
-                # For bias method or no MOE
-                lossf = ce_loss.item() #* gradient_accumulation_steps
-            
-            if local_iter_num >= 5: # let the training loop settle a bit
-                mfu = raw_model.estimate_mfu(batch_size * gradient_accumulation_steps, dt)
-                running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
-            
-            # Build main progress line
-            if aux_loss is not None:
-                main_postfix = {
-                    'train_loss': f'{ce_lossf:.4f}',
-                    'aux_loss': f'{aux_lossf:.4f}',
-                    'time': f'{dt*1000:.1f}ms',
-                    'mfu': f'{running_mfu*100:.1f}%'
-                }
-            else:
-                main_postfix = {
-                    'loss': f'{lossf:.4f}',
-                    'time': f'{dt*1000:.1f}ms',
-                    'mfu': f'{running_mfu*100:.1f}%'
-                }
-            pbar.set_postfix(main_postfix)
-            
-            # Update MOE layer progress bars in place
-            if moe_layer_stats and moe_pbars:
-                for stats in moe_layer_stats:
-                    layer_idx = stats['layer']
-                    if layer_idx < len(moe_pbars):
-                        usage_str = ','.join(stats['usage'])
-                        bias_str = ','.join(stats['bias'])
-                        if stats['momentum'] and moe_bias_momentum_enabled:
-                            momentum_str = ','.join(stats['momentum'])
-                            layer_desc = f"L{layer_idx}: usage[{usage_str}] bias[{bias_str}] mom[{momentum_str}]"
-                        else:
-                            layer_desc = f"L{layer_idx}: usage[{usage_str}] bias[{bias_str}] target={stats['target']:.3f}"
-                        moe_pbars[layer_idx].set_description(layer_desc)
-    iter_num += 1
-    local_iter_num += 1
-
-    if mup_enable_coord_check_logging:
-        for handle in coord_check_handles:
-            handle.remove()
-
-    # termination conditions
-    if iter_num > max_iters:
-        print(f"max_iters={max_iters} reached\n" + "\n" * n_layer)
-        
-        # Perform final validation sweep before ending training
-        if master_process:
-            print("Performing final validation sweep...")
-            # Temporarily force validation loss computation for final sweep
-            original_skip_val_loss = skip_val_loss
-            globals()['skip_val_loss'] = False  # Force validation computation
-            losses = estimate_loss()
-            globals()['skip_val_loss'] = original_skip_val_loss  # Restore original setting
-            if not np.isnan(losses['train']):  # Only log if not NaN
-                log_dict = {
-                    "iter": iter_num,
-                    "train/loss": losses['train'],
-                    "val/loss": losses['val'],
-                    "lr": lr,
-                    "mfu": running_mfu*100, # convert to percentage
-                }
-                if mup_enable_coord_check_logging and coord_check_dict is not None:
-                    for key in coord_check_dict:
-                        log_dict[key + '_act_abs_mean'] = np.mean(coord_check_dict[key])
-                if wandb_log:
-                    wandb_run.log(log_dict)
-                if csv_log:
-                    csv_logger.log(log_dict)
-                    csv_logger.step()
-                    csv_logger.close()  # Ensure final row is written
-                print(f"Final validation - step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
-                
-                # Collect and print validation set MOE expert usage statistics
-                if num_exp > 1:
-                    print("\nCollecting expert usage on validation set...")
-                    
-                    # Reset all counters before validation pass
-                    with torch.no_grad():
-                        for block in raw_model.transformer.h:
-                            if hasattr(block, 'use_moe') and block.use_moe:
-                                block.mlp.tokens_per_expert.zero_()
-                                block.mlp.total_tokens.zero_()
-                    
-                    # Run validation batches with token counting enabled
-                    model.eval()
-                    val_losses = []
-                    for k in range(eval_iters):
-                        X, Y = get_batch('val')
-                        with ctx:
-                            # Temporarily enable token counting during validation
-                            for block in raw_model.transformer.h:
-                                if hasattr(block, 'use_moe') and block.use_moe:
-                                    mlp_moe = block.mlp
-                                    # Temporarily set training=True just for token counting
-                                    original_training = mlp_moe.training
-                                    mlp_moe.training = True
-                            
-                            logits, loss = model(X, Y)
-                            
-                            # Restore original training mode
-                            for block in raw_model.transformer.h:
-                                if hasattr(block, 'use_moe') and block.use_moe:
-                                    mlp_moe = block.mlp
-                                    mlp_moe.training = original_training
-                            
-                            val_losses.append(loss.item() if not isinstance(loss, tuple) else loss[0].item())
-                    
-                    model.train()
-                    
-                    # Print validation set expert usage statistics
-                    print("\nValidation set expert usage statistics:")
-                    with torch.no_grad():
-                        for i, block in enumerate(raw_model.transformer.h):
-                            if hasattr(block, 'use_moe') and block.use_moe:
-                                mlp_moe = block.mlp
-                                if mlp_moe.total_tokens > 0:
-                                    # Calculate average usage per expert
-                                    avg_usage = mlp_moe.tokens_per_expert / mlp_moe.total_tokens
-                                    target_usage = mlp_moe.num_act / mlp_moe.n_exp
-                                    
-                                    # Format the output similar to tqdm display
-                                    usage_str = ','.join([f'{u:.3f}' for u in avg_usage.tolist()])
-                                    bias_str = ','.join([f'{b:.3f}' for b in mlp_moe.bias.tolist()])
-                                    if mlp_moe.moe_bias_momentum_enabled and hasattr(mlp_moe, 'bias_momentum_buffer'):
-                                        momentum_str = ','.join([f'{m:.3f}' for m in mlp_moe.bias_momentum_buffer.tolist()])
-                                        print(f"L{i}: usage[{usage_str}] bias[{bias_str}] mom[{momentum_str}]")
-                                    else:
-                                        print(f"L{i}: usage[{usage_str}] bias[{bias_str}] target={target_usage:.3f}")
-                                    
-                                    # Reset counters after printing
-                                    mlp_moe.tokens_per_expert.zero_()
-                                    mlp_moe.total_tokens.zero_()
-        break
-
-# Close progress bars
-if master_process and pbar is not None:
-    pbar.close()
-    for moe_pbar in moe_pbars:
-        moe_pbar.close()
-
+# Cleanup DDP if used
 if ddp:
     destroy_process_group()

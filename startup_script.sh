@@ -1,11 +1,5 @@
 #!/bin/bash
 
-# Check if running on Windows
-if [[ "$OSTYPE" == "msys" ]] || [[ "$OSTYPE" == "cygwin" ]] || [[ "$OSTYPE" == "win32" ]]; then
-    echo "Detected Windows system. Please use startup_script.ps1 instead."
-    exit 1
-fi
-
 # Run the mithril setup script to create virtual environment and install dependencies
 echo "Step 1: Setting up Python virtual environment..."
 if [ -f "mithril/setup_venv.sh" ]; then

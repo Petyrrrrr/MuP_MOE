@@ -10,4 +10,4 @@ __pycache__/
 input.txt
 env/
 venv/
-mup_examples/*/*/out/*
+run_data/*

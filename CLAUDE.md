@@ -5,6 +5,7 @@ This is a nanoGPT implementation with muP (maximal update parametrization) suppo
 
 ## Development Notes
 - Follow existing code style and conventions
+- ALWAYS, ALWAYS, ALWAYS, be simple and write concise code. Do NOT overcomplicate the code.
 - Do not make unnecessary changes to the codebase. When only asking for visualization of experiment results, do not modify how the experiment is run.
 - If the request is not clear, ask for clarification.
 
