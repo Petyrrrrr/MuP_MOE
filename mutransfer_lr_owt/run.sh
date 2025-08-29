@@ -1,7 +1,7 @@
 #!/bin/bash
 # muP hyperparameter transfer with MOE - Bash version
 # Multi-GPU support: set NGPUS environment variable (default: 1)
-# Usage: NGPUS=4 ./run.sh
+# Usage: NGPUS=4 /home/ubuntu/MuP_MOE/mutransfer_lr_owt/run.sh
 
 NGPUS=${NGPUS:-1}
 if [ $NGPUS -gt 1 ]; then
