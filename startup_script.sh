@@ -57,3 +57,6 @@ echo ""
 echo "For distributed training with multiple GPUs:"
 echo "  torchrun --standalone --nproc_per_node=<num_gpus> train.py"
 echo ""
+
+git config --global user.email "jtz2003@qq.com"
+git config --global user.name "Petyrrrrr"

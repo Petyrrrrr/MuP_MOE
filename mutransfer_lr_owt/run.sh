@@ -1,17 +1,7 @@
 #!/bin/bash
 # muP hyperparameter transfer with MOE - Bash version
-# Multi-GPU support: set NGPUS environment variable (default: 1)
-# Usage: NGPUS=4 /home/ubuntu/MuP_MOE/mutransfer_lr_owt/run.sh
 
-NGPUS=${NGPUS:-1}
-if [ $NGPUS -gt 1 ]; then
-    echo "Running with $NGPUS GPUs using torchrun"
-    LAUNCHER="torchrun --standalone --nproc_per_node=$NGPUS"
-    # Note: gradient_accumulation_steps is automatically adjusted by train.py for DDP
-else
-    echo "Running on single GPU"
-    LAUNCHER="python3"
-fi
+LAUNCHER="python3"
 
 timestamp=$(python -c "from datetime import datetime; print(datetime.now().strftime('%Y%m%d_%H%M%S'))")
 
@@ -55,7 +45,7 @@ do
                     --bias=False \
                     --init_std=0.02 \
                     --learning_rate=$lr \
-                    --lr_decay_iters=1000 \
+                    --lr_decay_iters=2000 \
                     --min_lr=$min_lr \
                     --max_iters=1000 \
                     --weight_decay=0.0 \

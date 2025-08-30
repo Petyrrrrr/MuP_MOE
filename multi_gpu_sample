@@ -1,0 +1,390 @@
+import itertools, random, math
+from typing import Dict, Tuple, List
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.utils.data import DataLoader, TensorDataset
+import torch.multiprocessing as mp
+from concurrent.futures import ProcessPoolExecutor, as_completed
+import time
+from datetime import datetime
+import pickle as pkl
+import os
+from tqdm import tqdm
+import matplotlib.pyplot as plt
+from MOE_MF import *
+from utils import *
+
+# ---------------- device -----------------
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+DTYPE = torch.float32 
+SEEDS = 1
+print("Using device:", DEVICE)
+
+# Check available GPUs
+if torch.cuda.is_available():
+    N_GPUS = torch.cuda.device_count()
+    print(f"Number of GPUs available: {N_GPUS}")
+    for i in range(N_GPUS):
+        print(f"  GPU {i}: {torch.cuda.get_device_name(i)}")
+else:
+    N_GPUS = 0
+    print("No GPUs available, using CPU")
+
+torch.manual_seed(SEEDS)
+random.seed(SEEDS)
+np.random.seed(SEEDS)
+
+# --------------- hyperparams -------------
+TAU = 1.0
+SCALE_FACTOR = 1.0
+
+# Experiment parameters
+N_EXPERTS = [4, 8, 16, 32]  # Different numbers of experts to test
+WIDTHS = [512, 1024, 2048]  # Different expert widths to test
+K_CLASSES = 16  # Number of GMM clusters
+D_IN = 128  # Input dimension
+BATCH_BASE = 128  # Base batch size
+STEPS_BASE = 5000  # Number of training steps
+NOISE_STD = 0.1  # Noise standard deviation
+N_DATA = BATCH_BASE * np.max(N_EXPERTS) * STEPS_BASE  # Total training samples
+N_TEST = int(0.1 * N_DATA)  # Test samples
+ETA_GRID = np.logspace(-2.0, 1.0, 12)  # Learning rates to test
+EPS = 1e-8
+
+def run_one_gpu(n_exp: int, n_hid: int, eta_base: float, eta_idx: int, std_out_dir: str, 
+            X_train, y_train, train_classes, X_test, y_test, test_classes,
+            device_id: int) -> Tuple[float, np.ndarray]:
+    """Run one experiment on a specific GPU"""
+    
+    # Set the device for this process
+    device = f'cuda:{device_id}' if device_id >= 0 else 'cpu'
+    torch.cuda.set_device(device_id) if device_id >= 0 else None
+    
+    B = BATCH_BASE * n_exp
+    # Move data to specific GPU
+    X_train_gpu = X_train.to(device)
+    y_train_gpu = y_train.to(device)
+    X_test_gpu = X_test.to(device)
+    y_test_gpu = y_test.to(device)
+    test_classes_gpu = test_classes.to(device)
+    
+    loader = DataLoader(TensorDataset(X_train_gpu, y_train_gpu), batch_size=B)
+    D_IN = X_train.shape[1]
+    model = MoE_MF(D_IN, n_hid, n_exp, tau=TAU, scale_factor=SCALE_FACTOR).to(device)
+    data_it = iter(loader)
+    
+    # Create individual output file for this run
+    individual_file = os.path.join(std_out_dir, f"exp_{n_exp}_hid_{n_hid}_lr_{eta_idx}.txt")
+    with open(individual_file, "w") as f:
+        f.write(f"[GPU {device_id}] n={n_exp}, N={n_hid}, B={B}, max_steps={STEPS_BASE}, eta_base: {eta_base}\n\n")
+    
+    for step in range(STEPS_BASE):
+        try:
+            x, yb = next(data_it)
+        except StopIteration:
+            data_it = iter(loader)
+            x, yb = next(data_it)
+        # Data already on GPU, no need to transfer
+        
+        # Forward pass - mask is now soft probabilities p
+        f, mask = model(x)
+        
+        # q_hat is the average probability each expert gets over the batch
+        q_hat = mask.mean(dim=0)  # (n_exp,) - average of p values per expert
+        
+        #eta_base = eta_base / n_exp
+
+        # Compute gradients for router and experts (MF setting)
+        gate_lr =  eta_base * torch.ones_like(q_hat) * (1 / (q_hat + EPS))
+        mlp_lr = n_hid * eta_base * torch.ones_like(q_hat) * (1 / (q_hat + EPS))
+        
+        model.zero_grad()
+        loss = 0.5 * (f - yb).pow(2).mean()
+        loss.backward()
+        
+        with torch.no_grad():
+            # Update router weights
+            for i in range(n_exp):
+                if model.router.weight.grad is not None:
+                    model.router.weight[i] -= gate_lr[i] * model.router.weight.grad[i]
+            
+            # Update expert weights
+            for i, expert in enumerate(model.experts):
+                if expert.w1.weight.grad is not None:
+                    expert.w1.weight -= mlp_lr[i] * expert.w1.weight.grad
+                if expert.w2.weight.grad is not None:
+                    expert.w2.weight -= mlp_lr[i] * expert.w2.weight.grad
+            
+            # Update bias
+            if model.bias.grad is not None:
+                model.bias.data -= gate_lr * model.bias.grad
+                model.bias.data -= eta_base * (q_hat - 1/n_exp)
+    
+    # Compute final test MSE and routing matrix
+    model.eval()
+    with torch.no_grad():
+        # Data already on GPU from beginning
+        predictions, final_mask = model(X_test_gpu)
+        final_mse = ((predictions - y_test_gpu).pow(2).mean()).item()
+        final_q_hat = final_mask.mean(dim=0)
+        
+        # Compute routing matrix M (K_CLASSES x n_exp)
+        routing_matrix = torch.zeros(K_CLASSES, n_exp, device=device)
+        for k in range(K_CLASSES):
+            class_mask = (test_classes_gpu == k)
+            if class_mask.sum() > 0:
+                routing_matrix[k] = final_mask[class_mask].mean(dim=0)
+        
+        # Compute Frobenius norm of M * M^T - I
+        MMT = routing_matrix @ routing_matrix.T
+        I = torch.eye(K_CLASSES, device=device)
+        rms_norm = torch.sqrt(torch.mean((MMT - I)**2)).item()
+        
+    with open(individual_file, "a") as f:
+        f.write(f"[GPU {device_id}] Final q_hat: {final_q_hat.tolist()}\n")
+        f.write(f"[GPU {device_id}] Final bias.data: {model.bias.data.tolist()}\n")
+        f.write(f"[GPU {device_id}] Final test MSE: {final_mse}\n")
+        f.write(f"[GPU {device_id}] Final routing_matrix: {routing_matrix.cpu().numpy()}\n")
+        f.write(f"[GPU {device_id}] RMSE(M*M^T - I): {rms_norm:.6f}\n")
+        f.write("\n\n\n")
+    
+    print(f"[GPU {device_id}] n={n_exp}, N={n_hid}, η={eta_base:.2e} -> MSE={final_mse:.6f}, RMSE={rms_norm:.6f}")
+    
+    # Clear GPU memory
+    del model, X_train_gpu, y_train_gpu, X_test_gpu, y_test_gpu, test_classes_gpu
+    torch.cuda.empty_cache() if device_id >= 0 else None
+    
+    return final_mse, final_q_hat.cpu().numpy()
+
+
+def run_experiment_wrapper(args):
+    """Wrapper function for multiprocessing"""
+    n_exp, n_hid, eta, eta_idx, std_out_dir, X_train, y_train, train_classes, X_test, y_test, test_classes, device_id = args
+    try:
+        mse, final_q_hat = run_one_gpu(
+            n_exp, n_hid, float(eta), eta_idx, std_out_dir,
+            X_train, y_train, train_classes,
+            X_test, y_test, test_classes,
+            device_id
+        )
+        return (n_exp, n_hid, eta, mse, device_id)
+    except Exception as e:
+        print(f"Error in experiment n={n_exp}, N={n_hid}, η={eta:.2e} on GPU {device_id}: {str(e)}")
+        return (n_exp, n_hid, eta, float('nan'), device_id)
+
+
+def main():
+    # Copy this script to records
+    out_dir = copy_file()
+    print(out_dir)
+    with open(out_dir, "a") as f:
+        f.write("\n\n\n\n std_out: \n\n\n\n")
+    
+    def fprint(text="", verbose = False):
+        if verbose:
+            print(text)
+        with open(out_dir, "a") as f:
+            f.write("\n" + str(text) + "\n")
+    
+    # Create output files
+    results: Dict[Tuple[int,int], List[Tuple[float,float]]] = {}
+    date_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    title = f"MF-Hyperparameter-Transfer-MultiGPU_{date_time}"
+    file_name = "results/" + title + ".pkl"
+    std_out_file = "std_out/" + title + ".txt"
+    
+    # Create subdirectory for individual run outputs
+    std_out_dir = os.path.join("std_out", title + "_runs")
+    
+    # Ensure directories exist
+    os.makedirs(os.path.dirname(file_name), exist_ok=True)
+    os.makedirs(os.path.dirname(std_out_file), exist_ok=True)
+    os.makedirs(std_out_dir, exist_ok=True)
+    
+    fprint(f"MuP-Free (MF) Hyperparameter Transfer Experiment (Multi-GPU)")
+    fprint(f"==============================================================")
+    fprint(f"Configuration:")
+    fprint(f"  Number of GPUs: {N_GPUS}")
+    fprint(f"  GMM Clusters (K_CLASSES): {K_CLASSES}")
+    fprint(f"  Input dimension (D_IN): {D_IN}")
+    fprint(f"  Number of Experts to test: {N_EXPERTS}")
+    fprint(f"  Expert widths to test: {WIDTHS}")
+    fprint(f"  Training samples: {N_DATA}")
+    fprint(f"  Test samples: {N_TEST}")
+    fprint(f"  Training steps: {STEPS_BASE}")
+    fprint(f"  Noise std: {NOISE_STD}")
+    fprint(f"  Learning rates to test: {ETA_GRID.tolist()}")
+    fprint(f"  Saving results to: {file_name}", verbose = True)
+    fprint(f"  Individual run outputs to: {std_out_dir}", verbose = True)
+    fprint()
+    
+    # Generate ONE dataset for all experiments (ensures fair comparison)
+    fprint("Generating dataset...")
+    X, y, class_indices = make_gaussian_dataset_vectorized(
+        N_DATA + N_TEST, D_IN, k=K_CLASSES, noise_std=NOISE_STD
+    )
+    X_train, y_train, train_classes = X[:N_DATA], y[:N_DATA], class_indices[:N_DATA]
+    X_test, y_test, test_classes = X[N_DATA:], y[N_DATA:], class_indices[N_DATA:]
+    
+    assert X_train.shape[0] == N_DATA
+    assert X_train.shape[1] == D_IN
+    fprint(f"Dataset generated: train shape={X_train.shape}, test shape={X_test.shape}")
+    fprint()
+    
+    # Prepare all experiment configurations
+    all_experiments = []
+    for n_exp, n_hid in itertools.product(N_EXPERTS, WIDTHS):
+        for eta_idx, eta in enumerate(ETA_GRID):
+            all_experiments.append((n_exp, n_hid, eta, eta_idx))
+    
+    fprint(f"Total experiments to run: {len(all_experiments)}")
+    fprint(f"Experiments per GPU: ~{len(all_experiments) // max(N_GPUS, 1)}")
+    fprint()
+    
+    if N_GPUS > 1:
+        # Multi-GPU execution using multiprocessing
+        fprint("Starting multi-GPU parallel execution...")
+        
+        # Set up multiprocessing
+        mp.set_start_method('spawn', force=True)
+        
+        # Create experiment arguments with GPU assignments
+        experiment_args = []
+        for idx, (n_exp, n_hid, eta, eta_idx) in enumerate(all_experiments):
+            device_id = idx % N_GPUS  # Round-robin GPU assignment
+            experiment_args.append((
+                n_exp, n_hid, eta, eta_idx, std_out_dir,
+                X_train, y_train, train_classes,
+                X_test, y_test, test_classes,
+                device_id
+            ))
+        
+        # Run experiments in parallel
+        import threading
+        results_lock = threading.Lock()
+        
+        with ProcessPoolExecutor(max_workers=N_GPUS) as executor:
+            # Submit all tasks
+            futures = {executor.submit(run_experiment_wrapper, args): args for args in experiment_args}
+            
+            # Process results as they complete
+            completed_count = 0
+            for future in tqdm(as_completed(futures), total=len(futures), desc="Experiments"):
+                result = future.result()
+                n_exp, n_hid, eta, mse, device_id = result
+                
+                # Thread-safe update of results dictionary
+                with results_lock:
+                    key = (n_exp, n_hid)
+                    if key not in results:
+                        results[key] = []
+                    results[key].append((eta, mse))
+                    
+                    # Sort results for this configuration to maintain order
+                    results[key] = sorted(results[key], key=lambda x: x[0])
+                    
+                    completed_count += 1
+                    fprint(f"[GPU {device_id}] n={n_exp}, N={n_hid}, η={eta:.3e} -> test MSE={mse:.6f} ({completed_count}/{len(futures)})")
+                    
+                    # Save intermediate results with thread safety
+                    with open(file_name, 'wb') as f:
+                        pkl.dump(dict(results), f)
+    
+    else:
+        # Single GPU/CPU execution (fallback to original sequential approach)
+        fprint("Running experiments sequentially (single GPU/CPU)...")
+        
+        device_id = 0 if N_GPUS > 0 else -1
+        
+        for n_exp, n_hid in itertools.product(N_EXPERTS, WIDTHS):
+            key = (n_exp, n_hid)
+            results[key] = []
+            fprint(f"\n{'='*60}")
+            fprint(f"Testing configuration: n_experts={n_exp}, width={n_hid}")
+            fprint(f"{'='*60}")
+            
+            nan_seen = False
+            
+            for eta_idx, eta in enumerate(ETA_GRID):
+                time_start = time.time()
+                
+                if nan_seen:
+                    mse = float('nan')
+                    fprint(f"  η_base={eta:.3e} -> Skipped (previous NaN)")
+                else:
+                    try:
+                        mse, final_q_hat = run_one_gpu(
+                            n_exp, n_hid, float(eta), eta_idx, std_out_dir,
+                            X_train, y_train, train_classes,
+                            X_test, y_test, test_classes,
+                            device_id
+                        )
+                        fprint(f"  η_base={eta:.3e} -> test MSE={mse:.6f}")
+                    except Exception as e:
+                        fprint(f"  η_base={eta:.3e} -> Error: {str(e)}")
+                        mse = float('nan')
+                        nan_seen = True
+                
+                if math.isnan(mse) or math.isinf(mse):
+                    nan_seen = True
+                
+                results[key].append((eta, mse))
+                
+                time_end = time.time()
+                fprint(f"    Time: {time_end - time_start:.1f}s")
+                
+                # Save intermediate results
+                pkl.dump(results, open(file_name, 'wb'))
+    
+    fprint("\n" + "="*60)
+    fprint("Experiment completed!")
+    fprint(f"Results saved to: {file_name}")
+    fprint(f"Log saved to: {std_out_file}")
+    fprint(f"Script copy saved to: {out_dir}")
+    
+    # Sort results for consistent plotting
+    for key in results:
+        results[key] = sorted(results[key], key=lambda x: x[0])
+    
+    # Print summary of best learning rates
+    fprint("\nBest learning rates for each configuration:")
+    for (n_exp, n_hid), pts in results.items():
+        valid_pts = [(e, m) for e, m in pts if not math.isnan(m)]
+        if valid_pts:
+            best_eta, best_mse = min(valid_pts, key=lambda x: x[1])
+            fprint(f"  n={n_exp}, N={n_hid}: η_base={best_eta:.3e} (MSE={best_mse:.6f})")
+    
+    # Create final plot
+    plt.figure(figsize=(8, 5))
+    plt.plot(ETA_GRID, [NOISE_STD**2] * len(ETA_GRID), 'k--', 
+            label=f'Noise floor ({NOISE_STD**2:.4f})', linewidth=2)
+    
+    for (n_exp, n_hid), pts in results.items():
+        if pts:  # Only plot if we have data
+            etas, mses = zip(*pts)
+            # Filter out NaN values for plotting
+            valid_pts = [(e, m) for e, m in zip(etas, mses) if not math.isnan(m)]
+            if valid_pts:
+                valid_etas, valid_mses = zip(*valid_pts)
+                plt.plot(valid_etas, valid_mses, '-o', 
+                        label=f'n={n_exp}, N={n_hid}', linewidth=1.5, markersize=6)
+    
+    plt.xscale('log')
+    plt.yscale('log')
+    plt.xlabel(r'Base learning rate $\eta_{\mathrm{base}}$', fontsize=12)
+    plt.ylabel('Test MSE', fontsize=12)
+    plt.title(f'MuP-Free Hyperparameter Transfer (K={K_CLASSES} clusters, {N_GPUS} GPUs)', fontsize=14)
+    plt.legend(fontsize=10, loc='best')
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    
+    # Save and show plot
+    plot_file = f"mf_transfer_plot_multigpu_{date_time}.png"
+    plt.savefig(plot_file, dpi=150, bbox_inches='tight')
+    fprint(f"Plot saved to: {plot_file}")
+    plt.show()
+
+if __name__ == "__main__":
+    main()
