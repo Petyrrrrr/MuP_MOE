@@ -13,7 +13,7 @@ do
         do
             for seed in 1
             do
-                depth = 4
+                depth=4
                 head_size=64
                 n_heads=$((width / head_size))
                 mup_base_width=256

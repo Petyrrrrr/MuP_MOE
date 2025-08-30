@@ -1,10 +1,10 @@
  Usage:
 
   # Default: 8 GPUs, clean output enabled
-  python3 run_multi_gpu_ultimate.py
+  python3 run-multi-gpu.py
 
   # Custom configuration
-  python3 run_multi_gpu_ultimate.py --gpus 4 --jobs-per-gpu 2
+  python3 run-multi-gpu.py --gpus 4 --jobs-per-gpu 2
 
   # Disable output cleaning (raw output)
-  python3 run_multi_gpu_ultimate.py --no-clean
+  python3 run-multi-gpu.py --no-clean
