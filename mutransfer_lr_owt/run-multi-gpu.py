@@ -97,12 +97,13 @@ class MultiGPURunner:
         """Generate all configurations to run."""
         configs = []
         
-        widths = [512]
-        num_exps = [8, 4, 2]
+        widths = [256, 512]
+        num_exps = [16, 8, 4, 2]
         lrs = [0.0625, 0.03125, 0.015625, 0.0078125, 0.00390625, 0.001953125, 
                0.0009765625, 0.00048828125, 0.000244140625, 0.0001220703125, 0.00006103515625]
         seeds = [1]
-        
+        max_iters = 1000  # Configuration parameter for max iterations
+        warmup_iters = 1000  # Configuration parameter for warmup iterations
         for width in widths:
             for num_exp in num_exps:
                 for lr in lrs:
@@ -118,7 +119,9 @@ class MultiGPURunner:
                             'mup_base_width': 256,
                             'mup_width_multiplier': width / 256,
                             'num_act': num_exp // 2,
-                            'n_layer': 8  # Fixed for now
+                            'n_layer': 8,  # Fixed for now
+                            'max_iters': max_iters,
+                            'warmup_iters': warmup_iters  # warmup_iters equals max_iters
                         }
                         configs.append(config)
         
@@ -141,7 +144,7 @@ class MultiGPURunner:
             "--init_from=scratch",
             "--wandb_log=False",
             "--csv_log=True",
-            "--warmup_iters=1000",
+            f"--warmup_iters={config['warmup_iters']}",
             "--dataset=openwebtext",
             "--gradient_accumulation_steps=16",
             "--batch_size=16",
@@ -155,7 +158,7 @@ class MultiGPURunner:
             f"--learning_rate={config['lr']}",
             "--lr_decay_iters=2000",
             f"--min_lr={config['min_lr']}",
-            "--max_iters=1000",
+            f"--max_iters={config['max_iters']}",
             "--weight_decay=0.0",
             "--beta1=0.9",
             "--beta2=0.95",

@@ -94,7 +94,7 @@ def estimate_loss(model, eval_iters, skip_val_loss, get_batch_fn, ctx, collect_m
     return out
 
 def get_lr(it, learning_rate, warmup_iters, lr_decay_iters, min_lr):
-    if it < warmup_iters:
+    if it <= warmup_iters:
         return learning_rate * it / warmup_iters
     if it > lr_decay_iters:
         return min_lr

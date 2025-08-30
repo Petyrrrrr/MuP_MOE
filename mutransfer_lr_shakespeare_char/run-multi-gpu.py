@@ -98,13 +98,14 @@ class MultiGPURunner:
         """Generate all configurations to run."""
         configs = []
         
-        widths = [512]
+        widths = [256, 512]
         num_exps = [16, 8, 4, 2]  # Note: different from OWT
         lrs = [0.0625, 0.03125, 0.015625, 0.0078125, 0.00390625, 0.001953125, 
-               0.0009765625, 0.00048828125, 0.000244140625, 0.0001220703125]  # 10 LRs instead of 11
+               0.0009765625, 0.00048828125, 0.000244140625, 0.0001220703125] 
         seeds = [1]
         depth = 4  # Fixed depth for Shakespeare
-        
+        max_iters = 500  # Configuration parameter for max iterations
+        warmup_iters = 500
         for width in widths:
             for num_exp in num_exps:
                 for lr in lrs:
@@ -119,7 +120,9 @@ class MultiGPURunner:
                             'n_heads': width // 64,
                             'mup_base_width': 256,
                             'mup_width_multiplier': width / 256,
-                            'num_act': num_exp // 2
+                            'num_act': num_exp // 2,
+                            'max_iters': max_iters,
+                            'warmup_iters': warmup_iters  # warmup_iters equals max_iters
                         }
                         configs.append(config)
         
@@ -142,7 +145,7 @@ class MultiGPURunner:
             "--init_from=scratch",
             "--wandb_log=False",
             "--csv_log=True",
-            "--warmup_iters=300",  # Different from OWT (300 vs 1000)
+            f"--warmup_iters={config['warmup_iters']}",  # Different from OWT (300 vs 1000)
             "--dataset=shakespeare_char",  # Different dataset
             "--gradient_accumulation_steps=1",  # Different from OWT (1 vs 16)
             "--batch_size=64",  # Different from OWT (64 vs 16)
@@ -155,7 +158,7 @@ class MultiGPURunner:
             "--init_std=0.02",
             f"--learning_rate={config['lr']}",
             f"--min_lr={config['lr']}",  # Same as lr (no decay)
-            "--max_iters=300",  # Different from OWT (300 vs 1000)
+            f"--max_iters={config['max_iters']}",  # Different from OWT (300 vs 1000)
             "--weight_decay=0.0",
             "--beta1=0.9",
             "--beta2=0.95",
