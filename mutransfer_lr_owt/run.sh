@@ -16,13 +16,13 @@ fi
 timestamp=$(python -c "from datetime import datetime; print(datetime.now().strftime('%Y%m%d_%H%M%S'))")
 
 
-for width in 256 512 1024 2048
+for width in 512
 do
     for num_exp in 8 4 2
     do
-        for lr in 0.125 0.0625 0.03125 0.015625 0.0078125 0.00390625 0.001953125 0.0009765625 0.00048828125 0.000244140625 0.0001220703125 0.00006103515625
+        for lr in 0.0625 0.03125 0.015625 0.0078125 0.00390625 0.001953125 0.0009765625 0.00048828125 0.000244140625 0.0001220703125 0.00006103515625
         do
-            for seed in 1 2 3
+            for seed in 1
             do
                 head_size=64
                 n_heads=$((width / head_size))
@@ -43,9 +43,10 @@ do
                     --init_from='scratch' \
                     --wandb_log=False \
                     --csv_log=True \
+                    --warmup_iters=1000 \
                     --dataset='openwebtext' \
-                    --gradient_accumulation_steps=8 \
-                    --batch_size=256 \
+                    --gradient_accumulation_steps=16 \
+                    --batch_size=16 \
                     --block_size=1024 \
                     --n_layer=8 \
                     --n_head=$n_heads \
@@ -69,8 +70,8 @@ do
                     --num_exp=$num_exp \
                     --num_act=$num_act \
                     --moe_tau=1.0 \
-                    --moe_bias_lr=1e-2 \
-                    --moe_bias_momentum=0.5 \
+                    --moe_bias_lr=$lr \
+                    --moe_bias_momentum=0.9 \
                     --moe_bias_momentum_enabled=True \
                     --moe_load_balance_method='bias' \
                     --moe_aux_loss_weight=1.0 \
@@ -78,7 +79,7 @@ do
                     --backend='nccl' \
                     --device='cuda' \
                     --dtype='float16' \
-                    --compile=True
+                    --compile=False
             done
         done
     done

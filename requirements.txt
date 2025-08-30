@@ -44,3 +44,5 @@ click>=8.1.0
 
 # CSV logging support
 csv-logger>=1.3.0
+
+hf_transfer
