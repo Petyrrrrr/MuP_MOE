@@ -218,22 +218,38 @@ class MLP_MOE(nn.Module):
         
         gate = (mask.detach() * score).unsqueeze(-1)  # (B*T, n_exp, 1)
         
-        # Expert forward pass
-        expert_outputs = []
-        for i, expert in enumerate(self.experts):
-            expert_mask = mask[:, i].unsqueeze(-1)  # (B*T, 1)
-            if expert_mask.any():
-                expert_out = expert(x_flat) * expert_mask  # (B*T, C)
-            else:
-                expert_out = torch.zeros_like(x_flat)
-            expert_outputs.append(expert_out)
         
-        expert_out_stacked = torch.stack(expert_outputs, dim=1)  # (B*T, n_exp, C)
+        # Which experts are used by at least one token?
+        active_experts = torch.nonzero(mask.any(dim=0), as_tuple=True)[0]  # (E_active,)
         
-        # Combine expert outputs
-        output = (gate * expert_out_stacked).sum(dim=1)  # (B*T, C)
-        output = output.view(B, T, C)  # (B, T, C)
+        output = None
+        C_out = None
         
+        for i in active_experts.tolist():
+            tok_idx = torch.nonzero(mask[:, i], as_tuple=True)[0]  # (n_i,)
+            if tok_idx.numel() == 0:
+                continue
+            
+            y_i = self.experts[i](x_flat.index_select(0, tok_idx))  # (n_i, C_out_i)
+            
+            if output is None:
+                C_out = y_i.size(-1)
+                output = x_flat.new_zeros(B*T, C_out) 
+
+            # gates for those routes (using gate, not score)
+            g_i = gate.index_select(0, tok_idx)[:, i, :]  # (n_i, 1)
+            
+            output.index_add_(0, tok_idx, g_i * y_i)
+        
+        # handle case where no experts are selected (shouldn't happen but be safe)
+        if output is None:
+            output = torch.zeros_like(x_flat)
+            
+        # reshape back
+        output = output.view(B, T, -1)  # (B, T, C_out)
+        
+
+
         # Always track tokens per expert for monitoring/display purposes
         if self.training:
             self.tokens_per_expert += mask.sum(dim=0).detach() # has shape (n_exp,)

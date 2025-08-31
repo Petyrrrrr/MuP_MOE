@@ -170,7 +170,7 @@ class MultiGPURunner:
             "--mup_output_alpha=1.0",
             f"--num_exp={config['num_exp']}",
             f"--num_act={config['num_act']}",
-            "--moe_tau=1.0",
+            "--moe_tau=0.1",
             f"--moe_bias_lr={config['lr']}",
             "--moe_bias_momentum=0.9",
             "--moe_bias_momentum_enabled=True",
