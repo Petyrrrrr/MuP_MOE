@@ -110,7 +110,9 @@ dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported
 compile = True # use PyTorch 2.0 to compile the model to be faster
 # -----------------------------------------------------------------------------
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
+
 exec(open('configurator.py').read()) # overrides from command line or config file
+
 config = {k: globals()[k] for k in config_keys} # will be useful for logging
 # -----------------------------------------------------------------------------
 
@@ -255,7 +257,7 @@ def estimate_loss_wrapper(override_skip_val=None, collect_moe_stats=False):
     return estimate_loss(model, eval_iters, skip_val, get_batch_wrapper, ctx, collect_moe_stats, raw_model)
 
 def get_lr_wrapper(it):
-    return get_lr(it, learning_rate, warmup_iters, lr_decay_iters, min_lr)
+    return get_lr(it, learning_rate, warmup_iters, lr_decay_iters, max_iters, min_lr, decay_lr = decay_lr)
 
 # logging
 wandb_run = None

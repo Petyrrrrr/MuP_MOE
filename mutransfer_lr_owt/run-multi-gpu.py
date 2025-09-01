@@ -96,13 +96,21 @@ class MultiGPURunner:
     def generate_configurations(self) -> List[Dict]:
         """Generate all configurations to run."""
         configs = []
-        
+
         widths = [256]
         num_exps = [16, 8, 4, 2]
-        lrs = [0.015625, 0.0078125, 0.00390625, 0.001953125,]
+        lrs = [0.008, 0.004]
         seeds = [1]
-        max_iters = 4000  # Configuration parameter for max iterations
+        max_iters = 12000  # Configuration parameter for max iterations
         warmup_iters = 1000  # Configuration parameter for warmup iterations
+        router_lr_mult = 1.0
+        bias_lr_mult = 1.0
+        init_std = 0.02
+        moe_tau = 0.1
+        n_layer = 8
+        batch_size = 16
+        gradient_accumulation_steps = 8
+
         for width in widths:
             for num_exp in num_exps:
                 for lr in lrs:
@@ -118,15 +126,15 @@ class MultiGPURunner:
                             'mup_base_width': 256,
                             'mup_width_multiplier': width / 256,
                             'num_act': num_exp // 2,
-                            'n_layer': 8,  # Fixed for now
+                            'n_layer': n_layer,
                             'max_iters': max_iters,
-                            'warmup_iters': warmup_iters,  # warmup_iters equals max_iters
-                            'router_lr_mult': 0.5,  # Multiplier for router learning rate
-                            'moe_bias_lr' : lr,
-                            'moe_tau' : 0.1,
-                            'init_std' : 0.02,
-                            'gradient_accumulation' : 8,
-                            'batch_size' : 16
+                            'warmup_iters': warmup_iters,  
+                            'router_lr_mult': router_lr_mult,  
+                            'moe_bias_lr' : lr * bias_lr_mult,
+                            'moe_tau' : moe_tau,
+                            'init_std' : init_std,
+                            'gradient_accumulation' : gradient_accumulation_steps,
+                            'batch_size' : batch_size
                         }
                         configs.append(config)
         
@@ -168,7 +176,7 @@ class MultiGPURunner:
             "--beta1=0.9",
             "--beta2=0.95",
             "--grad_clip=3.0",
-            "--decay_lr=False",
+            "--decay_lr=True",
             "--mup_enabled=True",
             f"--mup_width_multiplier={config['mup_width_multiplier']}",
             "--mup_input_alpha=1.0",
