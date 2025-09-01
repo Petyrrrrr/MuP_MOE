@@ -340,11 +340,7 @@ class Trainer:
                         if layer_idx < len(moe_pbars):
                             usage_str = ','.join(stats['usage'])
                             bias_str = ','.join(stats['bias'])
-                            if stats['momentum'] and self.moe_bias_momentum_enabled:
-                                momentum_str = ','.join(stats['momentum'])
-                                layer_desc = f"L{layer_idx}: usage[{usage_str}] bias[{bias_str}] mom[{momentum_str}]"
-                            else:
-                                layer_desc = f"L{layer_idx}: usage[{usage_str}] bias[{bias_str}] target={stats['target']:.3f}"
+                            layer_desc = f"L{layer_idx}: usage[{usage_str}] bias[{bias_str}]"
                             moe_pbars[layer_idx].set_description(layer_desc)
             
             # Update progress bar
@@ -355,12 +351,10 @@ class Trainer:
             local_iter_num += 1
             
             # termination conditions
-            if iter_num > self.max_iters:
-                print(f"max_iters={self.max_iters} reached\n" + "\n" * self.n_layer)
-                
-                # Perform final validation sweep before ending training
+            if iter_num > self.max_iters or iter_num % 1000 == 1:
+                # Perform validation sweep before ending training
                 if self.master_process:
-                    print("Performing final validation sweep...")
+                    print("Performing validation sweep...")
                     
                     # Single validation pass that collects both loss and MOE stats
                     collect_moe = self.num_exp > 1
@@ -374,17 +368,18 @@ class Trainer:
                             "lr": lr,
                             "mfu": running_mfu*100, # convert to percentage
                         }
-                        if self.mup_enable_coord_check_logging and hasattr(self, '_last_coord_check_dict'):
-                            if self._last_coord_check_dict is not None:
-                                for key in self._last_coord_check_dict:
-                                    log_dict[key + '_act_abs_mean'] = np.mean(self._last_coord_check_dict[key])
-                        if self.wandb_log and self.wandb_run:
-                            self.wandb_run.log(log_dict)
-                        if self.csv_log and self.csv_logger:
-                            self.csv_logger.log(log_dict)
-                            self.csv_logger.step()
-                            self.csv_logger.close()  # Ensure final row is written
-                        print(f"Final validation - step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+                        if iter_num > self.max_iters:
+                            if self.mup_enable_coord_check_logging and hasattr(self, '_last_coord_check_dict'):
+                                if self._last_coord_check_dict is not None:
+                                    for key in self._last_coord_check_dict:
+                                        log_dict[key + '_act_abs_mean'] = np.mean(self._last_coord_check_dict[key])
+                            if self.wandb_log and self.wandb_run:
+                                self.wandb_run.log(log_dict)
+                            if self.csv_log and self.csv_logger:
+                                self.csv_logger.log(log_dict)
+                                self.csv_logger.step()
+                                self.csv_logger.close()  # Ensure final row is written
+                        print(f"Validation - step {iter_num}: val loss {losses['val']:.4f}")
                         
                         # Print and save MOE expert usage statistics if collected
                         if collect_moe and 'moe_expert_usage' in losses:
@@ -399,15 +394,10 @@ class Trainer:
                                 usage_str = ','.join([f'{u:.3f}' for u in layer_usage])
                                 bias_str = ','.join([f'{b:.3f}' for b in self.raw_model.transformer.h[i].mlp.bias.tolist()])
                                 
-                                if (self.raw_model.transformer.h[i].mlp.moe_bias_momentum_enabled and 
-                                    hasattr(self.raw_model.transformer.h[i].mlp, 'bias_momentum_buffer')):
-                                    momentum_str = ','.join([f'{m:.3f}' for m in self.raw_model.transformer.h[i].mlp.bias_momentum_buffer.tolist()])
-                                    print(f"L{i}: usage[{usage_str}] bias[{bias_str}] mom[{momentum_str}]")
-                                else:
-                                    print(f"L{i}: usage[{usage_str}] bias[{bias_str}] target={target_usage:.3f}")
+                                print(f"L{i}: usage[{usage_str}] bias[{bias_str}] target={target_usage:.3f}")
                             
                             # Save expert usage matrix to CSV (num_layers x num_experts format)
-                            val_csv_path = os.path.join(self.out_dir, 'log_val.csv')
+                            val_csv_path = os.path.join(self.out_dir, 'log_val'+str(iter_num//1000)+'.csv')
                             with open(val_csv_path, 'w', newline='') as f:
                                 writer = csv.writer(f)
                                 
@@ -420,6 +410,7 @@ class Trainer:
                                     writer.writerow([f'{usage:.6f}' for usage in layer_usage])
                             
                             print(f"Expert usage matrix saved to {val_csv_path}")
+            if iter_num > self.max_iters:
                 break
         
         # Close progress bars
