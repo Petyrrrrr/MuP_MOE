@@ -97,12 +97,11 @@ class MultiGPURunner:
         """Generate all configurations to run."""
         configs = []
         
-        widths = [256, 512]
+        widths = [256]
         num_exps = [16, 8, 4, 2]
-        lrs = [0.0625, 0.03125, 0.015625, 0.0078125, 0.00390625, 0.001953125, 
-               0.0009765625, 0.00048828125, 0.000244140625, 0.0001220703125, 0.00006103515625]
+        lrs = [0.015625, 0.0078125, 0.00390625, 0.001953125,]
         seeds = [1]
-        max_iters = 1000  # Configuration parameter for max iterations
+        max_iters = 4000  # Configuration parameter for max iterations
         warmup_iters = 1000  # Configuration parameter for warmup iterations
         for width in widths:
             for num_exp in num_exps:
@@ -121,7 +120,13 @@ class MultiGPURunner:
                             'num_act': num_exp // 2,
                             'n_layer': 8,  # Fixed for now
                             'max_iters': max_iters,
-                            'warmup_iters': warmup_iters  # warmup_iters equals max_iters
+                            'warmup_iters': warmup_iters,  # warmup_iters equals max_iters
+                            'router_lr_mult': 0.5,  # Multiplier for router learning rate
+                            'moe_bias_lr' : lr,
+                            'moe_tau' : 0.1,
+                            'init_std' : 0.02,
+                            'gradient_accumulation' : 8,
+                            'batch_size' : 16
                         }
                         configs.append(config)
         
@@ -146,15 +151,15 @@ class MultiGPURunner:
             "--csv_log=True",
             f"--warmup_iters={config['warmup_iters']}",
             "--dataset=openwebtext",
-            "--gradient_accumulation_steps=16",
-            "--batch_size=16",
+            f"--gradient_accumulation_steps={config['gradient_accumulation']}",
+            f"--batch_size={config['batch_size']}",
             "--block_size=1024",
             f"--n_layer={config['n_layer']}",
             f"--n_head={config['n_heads']}",
             f"--n_embd={config['width']}",
             "--dropout=0.0",
             "--bias=False",
-            "--init_std=0.02",
+            f"--init_std={config['init_std']}",
             f"--learning_rate={config['lr']}",
             "--lr_decay_iters=2000",
             f"--min_lr={config['min_lr']}",
@@ -170,9 +175,10 @@ class MultiGPURunner:
             "--mup_output_alpha=1.0",
             f"--num_exp={config['num_exp']}",
             f"--num_act={config['num_act']}",
-            "--moe_tau=0.1",
-            f"--moe_bias_lr={config['lr']}",
+            f"--moe_tau={config['moe_tau']}",
+            f"--moe_bias_lr={config['moe_bias_lr']}",
             "--moe_bias_momentum=0.9",
+            f"--router_lr_mult={config.get('router_lr_mult', 1.0)}",
             "--moe_bias_momentum_enabled=True",
             "--moe_load_balance_method=bias",
             "--moe_aux_loss_weight=1.0",

@@ -64,6 +64,7 @@ class Trainer:
         self.moe_load_balance_method = config['moe_load_balance_method']
         self.moe_bias_lr = config['moe_bias_lr']
         self.moe_bias_momentum_enabled = config['moe_bias_momentum_enabled']
+        self.router_lr_mult = config.get('router_lr_mult', 1.0)  # Default to 1.0 if not specified
         self.skip_val_loss = config['skip_val_loss']
         
         # Get raw model (unwrap DDP if needed)
@@ -236,7 +237,7 @@ class Trainer:
             lr = get_lr_fn(iter_num)
             for param_group in self.optimizer.param_groups:
                 if param_group.get('is_router', False):
-                    param_group['lr'] = lr / math.sqrt(self.n_embd)
+                    param_group['lr'] = self.router_lr_mult * lr / math.sqrt(self.n_embd)
                 else:
                     param_group['lr'] = lr * param_group.get('lr_scale', 1.0)
             

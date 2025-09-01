@@ -97,6 +97,7 @@ moe_bias_momentum = 0.9 # EMA decay factor for bias gradient momentum (only used
 moe_bias_momentum_enabled = True # Enable momentum for router bias updates (only used with bias method)
 moe_load_balance_method = "bias" # "bias" or "aux_loss" - method for load balancing  
 moe_aux_loss_weight = 0.01 # Auxiliary loss coefficient (only used with aux_loss method)
+router_lr_mult = 1.0 # Multiplier for router learning rate (default 1.0)
 alpha = 4.0 # Hidden layer size multiplier (hidden_size = alpha * n_embd)
 # seed
 seed = 1337
