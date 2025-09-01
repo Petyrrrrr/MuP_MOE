@@ -354,8 +354,9 @@ class Trainer:
             if iter_num > self.max_iters or iter_num % 1000 == 1:
                 # Perform validation sweep before ending training
                 if self.master_process:
-                    print("Performing validation sweep...")
-                    
+                    print()
+                    print("Performing validation sweep at iter_num " + str(iter_num))
+                    print()
                     # Single validation pass that collects both loss and MOE stats
                     collect_moe = self.num_exp > 1
                     losses = estimate_loss_fn(override_skip_val=False, collect_moe_stats=collect_moe)
@@ -389,27 +390,20 @@ class Trainer:
                             for i, layer_usage in enumerate(expert_usage_matrix):
                                 # Get layer info for display
                                 target_usage = self.raw_model.transformer.h[i].mlp.num_act / self.raw_model.transformer.h[i].mlp.n_exp
-                                
-                                # Format the output similar to tqdm display
                                 usage_str = ','.join([f'{u:.3f}' for u in layer_usage])
                                 bias_str = ','.join([f'{b:.3f}' for b in self.raw_model.transformer.h[i].mlp.bias.tolist()])
-                                
                                 print(f"L{i}: usage[{usage_str}] bias[{bias_str}] target={target_usage:.3f}")
                             
                             # Save expert usage matrix to CSV (num_layers x num_experts format)
-                            val_csv_path = os.path.join(self.out_dir, 'log_val'+str(iter_num//1000)+'.csv')
-                            with open(val_csv_path, 'w', newline='') as f:
-                                writer = csv.writer(f)
-                                
-                                # Write header with expert indices
-                                header = [f'E{i}' for i in range(self.num_exp)]
-                                writer.writerow(header)
-                                
-                                # Write each layer as a row
-                                for layer_usage in expert_usage_matrix:
-                                    writer.writerow([f'{usage:.6f}' for usage in layer_usage])
-                            
-                            print(f"Expert usage matrix saved to {val_csv_path}")
+                            if iter_num > self.max_iters:
+                                val_csv_path = os.path.join(self.out_dir, 'log_val.csv')
+                                with open(val_csv_path, 'w', newline='') as f:
+                                    writer = csv.writer(f)
+                                    header = [f'E{i}' for i in range(self.num_exp)]
+                                    writer.writerow(header)
+                                    for layer_usage in expert_usage_matrix:
+                                        writer.writerow([f'{usage:.6f}' for usage in layer_usage])
+                                print(f"Expert usage matrix saved to {val_csv_path}")
             if iter_num > self.max_iters:
                 break
         
