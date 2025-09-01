@@ -66,6 +66,7 @@ class Trainer:
         self.moe_bias_momentum_enabled = config['moe_bias_momentum_enabled']
         self.router_lr_mult = config.get('router_lr_mult', 1.0)  # Default to 1.0 if not specified
         self.skip_val_loss = config['skip_val_loss']
+        self.max_nan_losses = config.get('max_nan_losses', 50)  # Default to 50 if not specified
         
         # Get raw model (unwrap DDP if needed)
         self.raw_model = model.module if self.ddp else model
@@ -77,6 +78,9 @@ class Trainer:
         device_type = 'cuda' if 'cuda' in str(self.device) else 'cpu'
         ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[self.dtype]
         self.ctx = torch.amp.autocast(device_type=device_type, dtype=ptdtype) if device_type == 'cuda' else nullcontext()
+        
+        # Initialize NaN loss counter
+        self.nan_loss_count = 0
         
         # Initialize wandb and csv loggers if needed (handled by main script)
         self.wandb_run = None
@@ -233,7 +237,7 @@ class Trainer:
         
         while True:
             # determine and set the learning rate for this iteration
-            # LR scheduler disabled - use constant learning rate
+            
             lr = get_lr_fn(iter_num)
             for param_group in self.optimizer.param_groups:
                 if param_group.get('is_router', False):
@@ -245,7 +249,12 @@ class Trainer:
             if iter_num % self.eval_interval == 0 and self.master_process:
                 losses = estimate_loss_fn()
                 if np.isnan(losses['train']):
-                    raise Exception('NaN loss')
+                    self.nan_loss_count += 1
+                    if self.nan_loss_count > self.max_nan_losses:
+                        raise Exception(f'NaN loss encountered {self.nan_loss_count} times, exceeding max_nan_losses={self.max_nan_losses}')
+                    print(f"Warning: NaN loss detected ({self.nan_loss_count}/{self.max_nan_losses}), skipping update and continuing training")
+                    iter_num += 1
+                    continue
                 
                 log_dict = {
                     "iter": iter_num,
