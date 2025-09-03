@@ -98,17 +98,17 @@ class MultiGPURunner:
         configs = []
 
         widths = [256]
-        num_exps = [16, 8, 4, 2]
+        num_exps = [8, 4, 2]
         lrs = [0.008, 0.004]
         seeds = [1]
-        max_iters = 12000  # Configuration parameter for max iterations
-        warmup_iters = 1000  # Configuration parameter for warmup iterations
+        max_iters = 10000  # Configuration parameter for max iterations
+        warmup_iters = 2000  # Configuration parameter for warmup iterations
         router_lr_mult = 1.0
         bias_lr_mult = 1.0
         init_std = 0.02
         moe_tau = 0.1
-        n_layer = 8
-        batch_size = 16
+        n_layer = 12
+        batch_size = 48
         gradient_accumulation_steps = 8
 
         for width in widths:
@@ -193,7 +193,7 @@ class MultiGPURunner:
             f"--seed={config['seed']}",
             "--backend=nccl",
             "--device=cuda",
-            "--dtype=float16",
+            "--dtype=bfloat16",
             "--compile=False"
         ]
         

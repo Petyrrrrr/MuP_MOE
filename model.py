@@ -263,11 +263,11 @@ class MLP_MOE(nn.Module):
         else:
             return output, mask.detach()
     
-    def update_router_bias(self, avg_usage, target_usage, lr_bias):
+    def update_router_bias(self, avg_usage, target_usage, lr_bias, disable_momentum = False):
         """Update router bias to encourage balanced expert usage with optional momentum"""
         gradient = avg_usage - target_usage  # (n_exp,)
         
-        if self.moe_bias_momentum_enabled:
+        if self.moe_bias_momentum_enabled and not disable_momentum:
             # Update momentum buffer (EMA of gradients)
             self.bias_momentum_buffer = (self.moe_bias_momentum * self.bias_momentum_buffer + 
                                         (1 - self.moe_bias_momentum) * gradient)

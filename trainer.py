@@ -86,7 +86,7 @@ class Trainer:
         self.wandb_run = None
         self.csv_logger = None
     
-    def update_moe_stats(self, raw_model, num_exp, moe_load_balance_method, moe_bias_lr, moe_bias_momentum_enabled):
+    def update_moe_stats(self, raw_model, num_exp, moe_load_balance_method, moe_bias_lr, moe_bias_momentum_enabled, iter_num):
         moe_layer_stats = []
         if num_exp > 1:
             with torch.no_grad():
@@ -108,7 +108,7 @@ class Trainer:
                             })
                             # Update bias only if using bias method
                             if moe_load_balance_method == "bias":
-                                mlp_moe.update_router_bias(avg_usage, target_usage, moe_bias_lr)
+                                mlp_moe.update_router_bias(avg_usage, target_usage, moe_bias_lr, disable_momentum = iter_num > 2000)
                             mlp_moe.tokens_per_expert.zero_()
                             mlp_moe.total_tokens.zero_()
         return moe_layer_stats
@@ -309,7 +309,7 @@ class Trainer:
             # Update router biases for MOE layers and collect stats for tqdm
             moe_layer_stats = self.update_moe_stats(
                 self.raw_model, self.num_exp, self.moe_load_balance_method, 
-                self.moe_bias_lr, self.moe_bias_momentum_enabled
+                self.moe_bias_lr, self.moe_bias_momentum_enabled, iter_num
             )
             
             # timing and logging
