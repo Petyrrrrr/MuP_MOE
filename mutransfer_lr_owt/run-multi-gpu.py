@@ -79,6 +79,7 @@ class MultiGPURunner:
         self.failed_jobs = 0
         self.job_queue = queue.Queue()
         self.active_processors = {}  # Track active output processors
+        self.gpu_available = {i: threading.Semaphore(max_jobs_per_gpu) for i in range(num_gpus)}  # Track GPU availability
         
     def create_log_directory(self, base_path: str = "/home/ubuntu/MuP_MOE/std_out/mutransfer_lr_owt") -> str:
         """Create and return the log directory path with organized structure."""
@@ -97,19 +98,19 @@ class MultiGPURunner:
         """Generate all configurations to run."""
         configs = []
 
-        widths = [256]
-        num_exps = [8, 4, 2]
-        lrs = [0.008, 0.004]
+        widths = [512, 256]
+        num_exps = [16, 8, 4, 2]
+        lrs = [0.128, 0.064, 0.032, 0.016, 0.008, 0.004, 0.002, 0.001]
         seeds = [1]
-        max_iters = 10000  # Configuration parameter for max iterations
+        max_iters = 2000  # Configuration parameter for max iterations
         warmup_iters = 2000  # Configuration parameter for warmup iterations
         router_lr_mult = 1.0
         bias_lr_mult = 1.0
         init_std = 0.02
         moe_tau = 0.1
         n_layer = 12
-        batch_size = 48
-        gradient_accumulation_steps = 8
+        batch_size = 32
+        gradient_accumulation_steps = 16
 
         for width in widths:
             for num_exp in num_exps:
@@ -209,46 +210,49 @@ class MultiGPURunner:
     
     def run_job(self, job: Job, gpu_id: int) -> bool:
         """Run a single job on the specified GPU with clean output processing."""
-        job.gpu_id = gpu_id
-        job.status = "running"
-        job.start_time = time.time()
+        # Acquire GPU semaphore (blocks if GPU is busy)
+        self.gpu_available[gpu_id].acquire()
         
-        # Build command
-        cmd_args, out_dir = self.build_command(job.config)
-        
-        # Create descriptive filename
-        job_desc = f"job_{job.job_id:04d}_gpu{gpu_id}_w{job.config['width']}_exp{job.config['num_exp']}_lr{job.config['lr']:.2e}_seed{job.config['seed']}"
-        
-        # File paths
-        log_file = self.log_dir / "stdout" / f"{job_desc}.log"
-        err_file = self.log_dir / "stderr" / f"{job_desc}.err"
-        meta_file = self.log_dir / "metadata" / f"{job_desc}.json"
-        
-        # Save initial metadata
-        metadata = {
-            "job_id": job.job_id,
-            "gpu_id": gpu_id,
-            "config": job.config,
-            "command": " ".join(cmd_args),
-            "out_dir": out_dir,
-            "start_time": job.start_time,
-            "log_file": str(log_file),
-            "err_file": str(err_file),
-            "clean_output": self.clean_output
-        }
-        
-        with open(meta_file, 'w') as f:
-            json.dump(metadata, f, indent=2)
-        
-        print(f"[GPU {gpu_id}] Starting job {job.job_id}: w={job.config['width']}, exp={job.config['num_exp']}, lr={job.config['lr']:.2e}")
-        
-        # Set environment for this GPU
-        env = os.environ.copy()
-        env['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
-        env['PYTHONUNBUFFERED'] = '1'  # Ensure unbuffered output
-        
-        # Run the command
         try:
+            job.gpu_id = gpu_id
+            job.status = "running"
+            job.start_time = time.time()
+            
+            # Build command
+            cmd_args, out_dir = self.build_command(job.config)
+            
+            # Create descriptive filename
+            job_desc = f"job_{job.job_id:04d}_gpu{gpu_id}_w{job.config['width']}_exp{job.config['num_exp']}_lr{job.config['lr']:.2e}_seed{job.config['seed']}"
+            
+            # File paths
+            log_file = self.log_dir / "stdout" / f"{job_desc}.log"
+            err_file = self.log_dir / "stderr" / f"{job_desc}.err"
+            meta_file = self.log_dir / "metadata" / f"{job_desc}.json"
+            
+            # Save initial metadata
+            metadata = {
+                "job_id": job.job_id,
+                "gpu_id": gpu_id,
+                "config": job.config,
+                "command": " ".join(cmd_args),
+                "out_dir": out_dir,
+                "start_time": job.start_time,
+                "log_file": str(log_file),
+                "err_file": str(err_file),
+                "clean_output": self.clean_output
+            }
+            
+            with open(meta_file, 'w') as f:
+                json.dump(metadata, f, indent=2)
+            
+            print(f"[GPU {gpu_id}] Starting job {job.job_id}: w={job.config['width']}, exp={job.config['num_exp']}, lr={job.config['lr']:.2e}")
+            
+            # Set environment for this GPU
+            env = os.environ.copy()
+            env['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
+            env['PYTHONUNBUFFERED'] = '1'  # Ensure unbuffered output
+            
+            # Run the command
             if self.clean_output:
                 # Use clean output processing
                 process = subprocess.Popen(
@@ -347,6 +351,9 @@ class MultiGPURunner:
                 f.write(f"\nException occurred: {str(e)}\n")
             
             return False
+        finally:
+            # Release GPU semaphore
+            self.gpu_available[gpu_id].release()
     
     def print_progress(self):
         """Print detailed progress information."""
@@ -427,14 +434,24 @@ class MultiGPURunner:
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             # Submit all jobs
             future_to_job = {}
-            gpu_assignment = 0
+            
+            # Create a worker function that finds an available GPU
+            def run_job_on_available_gpu(job):
+                # Try GPUs in round-robin order starting from job_id % num_gpus
+                start_gpu = job.job_id % self.num_gpus
+                for i in range(self.num_gpus):
+                    gpu_id = (start_gpu + i) % self.num_gpus
+                    # Try to acquire this GPU (non-blocking)
+                    if self.gpu_available[gpu_id].acquire(blocking=False):
+                        # GPU is available, release it immediately (run_job will re-acquire)
+                        self.gpu_available[gpu_id].release()
+                        return self.run_job(job, gpu_id)
+                
+                # If no GPU available immediately, just use the preferred one (will block)
+                return self.run_job(job, start_gpu)
             
             for job in self.jobs:
-                # Round-robin GPU assignment
-                gpu_id = gpu_assignment % self.num_gpus
-                gpu_assignment += 1
-                
-                future = executor.submit(self.run_job, job, gpu_id)
+                future = executor.submit(run_job_on_available_gpu, job)
                 future_to_job[future] = job
             
             # Monitor progress
