@@ -108,7 +108,7 @@ class MultiGPURunner:
         bias_lr_mult = 1.0
         init_std = 0.02
         moe_tau = 0.1
-        n_layer = 12
+        n_layer = 10
         batch_size = 32
         gradient_accumulation_steps = 16
 
