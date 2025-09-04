@@ -116,6 +116,7 @@ class MultiGPURunner:
             for num_exp in num_exps:
                 for lr in lrs:
                     for seed in seeds:
+                        weight_decay = 0.0
                         config = {
                             'width': width,
                             'num_exp': num_exp,
@@ -135,7 +136,8 @@ class MultiGPURunner:
                             'moe_tau' : moe_tau,
                             'init_std' : init_std,
                             'gradient_accumulation' : gradient_accumulation_steps,
-                            'batch_size' : batch_size
+                            'batch_size' : batch_size,
+                            'weight_decay' : weight_decay,
                         }
                         configs.append(config)
         
@@ -173,7 +175,7 @@ class MultiGPURunner:
             "--lr_decay_iters=2000",
             f"--min_lr={config['min_lr']}",
             f"--max_iters={config['max_iters']}",
-            "--weight_decay=0.0",
+            f"--weight_decay={config['weight_decay']}",
             "--beta1=0.9",
             "--beta2=0.95",
             "--grad_clip=3.0",
