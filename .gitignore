@@ -14,4 +14,3 @@ run_data/*
 std_out/*
 mutransfer_lr_shakespeare_char/plots/*
 mutransfer_lr_owt/plots/*
-mutransfer_lr_owt/run_data/*

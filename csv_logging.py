@@ -73,11 +73,20 @@ class CSVLogWrapper:
         self.header_updated = False
         self.is_finalized = False
         self.no_sync_keyword = 'no_sync' # Keyword to prevent syncing to wandb
+        
+        # Expert usage tracking
+        self.expert_usage_writers = {}
+        self.expert_usage_files = {}
+        self.num_experts = config.get('num_exp', 1)
+        self.n_layer = config.get('n_layer', 0)
+        self.track_expert_usage = self.num_experts > 1 and self.n_layer > 0
 
         if self.out_dir:
             os.makedirs(self.out_dir, exist_ok=True)
             self.setup_csv_writer()
             self.write_config()
+            if self.track_expert_usage:
+                self.setup_expert_usage_writers()
 
         atexit.register(self.close)
 
@@ -87,6 +96,20 @@ class CSVLogWrapper:
         self.csv_data_file = open(self.csv_data_path, 'w', newline='')
         self.csv_header_file = open(self.csv_header_path, 'w', newline='')
         self.csv_writer = csv.writer(self.csv_data_file)
+    
+    def setup_expert_usage_writers(self):
+        """Setup CSV writers for expert usage tracking per layer."""
+        for layer_idx in range(self.n_layer):
+            csv_path = os.path.join(self.out_dir, f'expert_usage_layer_{layer_idx}.csv')
+            csv_file = open(csv_path, 'w', newline='')
+            csv_writer = csv.writer(csv_file)
+            
+            # Write header with expert columns
+            header = [f'E{i}' for i in range(self.num_experts)]
+            csv_writer.writerow(header)
+            
+            self.expert_usage_files[layer_idx] = csv_file
+            self.expert_usage_writers[layer_idx] = csv_writer
 
     def write_config(self):
         if self.config:
@@ -100,6 +123,22 @@ class CSVLogWrapper:
             if key not in self.ordered_keys:
                 self.ordered_keys.append(key)
                 self.header_updated = True
+    
+    def log_expert_usage(self, moe_layer_stats):
+        """Log expert usage statistics to per-layer CSV files."""
+        if not self.track_expert_usage or not moe_layer_stats:
+            return
+        
+        for stats in moe_layer_stats:
+            layer_idx = stats['layer']
+            if layer_idx in self.expert_usage_writers:
+                # Convert usage strings back to floats and write
+                usage_values = [float(u) for u in stats['usage']]
+                self.expert_usage_writers[layer_idx].writerow(usage_values)
+                
+                # Flush periodically
+                if self.flush_every and (self.step_count % self.flush_every == 0):
+                    self.expert_usage_files[layer_idx].flush()
 
     def update_header(self):
         if self.header_updated:
@@ -146,6 +185,14 @@ class CSVLogWrapper:
             self.csv_data_file.flush()  # Ensure all data is written
             self.csv_data_file.close()
             self.csv_data_file = None  # Clear the reference
+        
+        # Close expert usage files
+        for layer_idx, file in self.expert_usage_files.items():
+            if file:
+                file.flush()
+                file.close()
+        self.expert_usage_files.clear()
+        self.expert_usage_writers.clear()
         
         # Small delay to let Windows release file handles
         import time

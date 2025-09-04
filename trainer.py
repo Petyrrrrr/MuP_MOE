@@ -312,6 +312,10 @@ class Trainer:
                 self.moe_bias_lr, self.moe_bias_momentum_enabled, iter_num
             )
             
+            # Log expert usage to CSV files
+            if self.csv_logger and moe_layer_stats:
+                self.csv_logger.log_expert_usage(moe_layer_stats)
+            
             # timing and logging
             t1 = time.time()
             dt = t1 - t0
