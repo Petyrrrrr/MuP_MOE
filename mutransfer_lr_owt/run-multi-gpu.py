@@ -111,12 +111,13 @@ class MultiGPURunner:
         n_layer = 10
         batch_size = 32
         gradient_accumulation_steps = 16
+        t_ema = 10
 
         for width in widths:
             for num_exp in num_exps:
                 for lr in lrs:
                     for seed in seeds:
-                        weight_decay = 0.0
+                        weight_decay = t_ema / (max_iters * lr)
                         config = {
                             'width': width,
                             'num_exp': num_exp,
