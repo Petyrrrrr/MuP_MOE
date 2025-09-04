@@ -213,40 +213,23 @@ class MLP_MOE(nn.Module):
         
         # Top-k selection
         _, topk_indices = mu_add_bias.topk(self.num_act, dim=-1)  # (B*T, num_act)
-        mask = torch.zeros_like(mu_add_bias)  # (B*T, n_exp)
+        mask = torch.zeros_like(mu_add_bias)                      # (B*T, n_exp)
         mask.scatter_(1, topk_indices, 1)
-        
-        gate = (mask.detach() * score).unsqueeze(-1)  # (B*T, n_exp, 1)
-        
-        
-        # Which experts are used by at least one token?
-        active_experts = torch.nonzero(mask.any(dim=0), as_tuple=True)[0]  # (E_active,)
-        
-        output = None
-        C_out = None
-        
-        for i in active_experts.tolist():
-            tok_idx = torch.nonzero(mask[:, i], as_tuple=True)[0]  # (n_i,)
-            if tok_idx.numel() == 0:
-                continue
-            
-            y_i = self.experts[i](x_flat.index_select(0, tok_idx))  # (n_i, C_out_i)
-            
-            if output is None:
-                C_out = y_i.size(-1)
-                output = x_flat.new_zeros(B*T, C_out) 
 
-            # gates for those routes (using gate, not score)
-            g_i = gate.index_select(0, tok_idx)[:, i, :]  # (n_i, 1)
-            
-            output.index_add_(0, tok_idx, g_i * y_i)
-        
-        # handle case where no experts are selected (shouldn't happen but be safe)
-        if output is None:
-            output = torch.zeros_like(x_flat)
-            
-        # reshape back
-        output = output.view(B, T, -1)  # (B, T, C_out)
+        # === Compute-sparse expert evaluation ===
+        act_mask = mask.detach()                  # don't backprop through selection
+        output   = torch.zeros_like(x_flat, dtype=score.dtype)       # (B*T, C)
+
+        for i, expert in enumerate(self.experts):
+            idx_i = act_mask[:, i].nonzero(as_tuple=True)[0]  # 1D indices of tokens routed to expert i
+            if idx_i.numel() == 0:
+                continue
+            x_i = x_flat.index_select(0, idx_i)              # (n_i, C)
+            y_i = expert(x_i)                                 # (n_i, C)  -- compute only on its tokens
+            g_i = score.index_select(0, idx_i)[:, i].unsqueeze(-1)  # (n_i, 1) sigmoid gates for expert i
+            output.index_add_(0, idx_i, (y_i * g_i).to(output.dtype))     
+
+        output = output.view(B, T, C)
         
 
 
