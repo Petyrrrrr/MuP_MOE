@@ -1,164 +1,81 @@
-# saves the C4 (English) dataset to binary files for training in the same style
-# as the common OpenWebText "prepare.py" template (nanoGPT-style).
-#
-# - Tokenizer: tiktoken GPT-2 BPE (50257 vocab), ids stored as uint16
-# - Files written: train.bin (~train_tokens*2 bytes), val.bin (~val_tokens*2 bytes), meta.pkl
-# - We stream C4 from Hugging Face and stop once we reach the requested token budgets
-#   (so we do not need to download the full dataset).
-#
-# Example:
-#   python prepare.py --out-dir data/c4 --config en --train-tokens 30000000000 --val-tokens 10000000
-#
-# Notes:
-# * 30B tokens -> ~60 GB for train.bin (uint16), and 10M tokens -> ~20 MB for val.bin.
-# * We do a counting pass first to know the exact number of tokens to pre-allocate for memmap,
-#   and then a writing pass to fill it. This keeps the template flow similar to the OpenWebText script.
-# * Each document is tokenized with encode_ordinary(...) and then we append the EOT token.
-#
-# Inspired by:
+# saves the openwebtext dataset to a binary file for training. following was helpful:
 # https://github.com/HazyResearch/flash-attention/blob/main/training/src/datamodules/language_modeling_hf.py
 
 import os
-import math
-import pickle
-from typing import Iterable, Tuple
-
-import numpy as np
 from tqdm import tqdm
+import numpy as np
 import tiktoken
-from datasets import load_dataset
+from datasets import load_dataset # huggingface datasets
 
-# number of workers (kept for template parity;
-# note: streaming .map doesn't use multiprocessing the same way)
+# number of workers in .map() call
+# good number to use is ~order number of cpu cores // 2
 num_proc = 8
 
-def _get_eot_id(enc: "tiktoken.Encoding") -> int:
-    # Try to use the encoding-provided EOT id; fall back to GPT-2's known token if not present
-    eot = getattr(enc, "eot_token", None)
-    if isinstance(eot, int):
-        return eot
-    # Fallback: GPT-2 endoftext is id 50256
-    try:
-        # safest: use the official special token with allowed_special
-        e = enc.encode("<|endoftext|>", allowed_special={"<|endoftext|>"})
-        if len(e) == 1:
-            return e[0]
-    except Exception:
-        pass
-    return 50256
+# number of workers in load_dataset() call
+# best number might be different from num_proc above as it also depends on NW speed.
+# it is better than 1 usually though
+num_proc_load_dataset = num_proc
 
-def _iter_text(ds_iter: Iterable) -> Iterable[str]:
-    for ex in ds_iter:
-        txt = ex.get("text", None)
-        if isinstance(txt, str) and txt:
-            yield txt
+enc = tiktoken.get_encoding("gpt2")
 
-def _count_tokens_for_split(config: str, split: str, target_tokens: int, enc: "tiktoken.Encoding", seed: int, shuffle_buffer: int) -> int:
-    """Streaming pass to count up to target_tokens."""
-    ds = load_dataset("c4", config, split=split, streaming=True)
-    if shuffle_buffer > 0:
-        ds = ds.shuffle(seed=seed, buffer_size=shuffle_buffer)
-    eot_id = _get_eot_id(enc)
-    total = 0
-    for text in tqdm(_iter_text(ds), desc=f"counting {split}", dynamic_ncols=True):
-        # +1 for eot token
-        total += len(enc.encode_ordinary(text)) + 1
-        if total >= target_tokens:
-            break
-    return total
+if __name__ == '__main__':
+    # takes 54GB in huggingface .cache dir, about 8M documents (8,013,769)
+    dataset = load_dataset("c4", "en", num_proc=num_proc_load_dataset)
 
-def _write_split(config: str, split: str, out_path: str, total_tokens: int, enc: "tiktoken.Encoding", seed: int, shuffle_buffer: int, write_batch: int = 1_000_000) -> int:
-    """Second pass to write exactly total_tokens tokens into a uint16 memmap."""
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    arr = np.memmap(out_path, dtype=np.uint16, mode="w+", shape=(total_tokens,))
-    idx = 0
-    buf = []
-    ds = load_dataset("c4", config, split=split, streaming=True)
-    if shuffle_buffer > 0:
-        ds = ds.shuffle(seed=seed, buffer_size=shuffle_buffer)
-    eot_id = _get_eot_id(enc)
+    # owt by default only contains the 'train' split, so create a test split
+    split_dataset = dataset["train"].train_test_split(test_size=0.0005, seed=2357, shuffle=True)
+    split_dataset['val'] = split_dataset.pop('test') # rename the test split to val
 
-    pbar = tqdm(total=total_tokens, desc=f"writing {split}", dynamic_ncols=True)
-    for text in _iter_text(ds):
-        ids = enc.encode_ordinary(text)
-        ids.append(eot_id)
-        # Clip last example if it would exceed total_tokens
-        remaining = total_tokens - idx
-        if remaining <= 0:
-            break
-        if len(ids) > remaining:
-            ids = ids[:remaining]
+    # this results in:
+    # >>> split_dataset
+    # DatasetDict({
+    #     train: Dataset({
+    #         features: ['text'],
+    #         num_rows: 8009762
+    #     })
+    #     val: Dataset({
+    #         features: ['text'],
+    #         num_rows: 4007
+    #     })
+    # })
 
-        buf.extend(ids)
-        if len(buf) >= write_batch:
-            arr[idx : idx + len(buf)] = np.array(buf, dtype=np.uint16)
-            idx += len(buf)
-            pbar.update(len(buf))
-            buf.clear()
+    # we now want to tokenize the dataset. first define the encoding function (gpt2 bpe)
+    def process(example):
+        ids = enc.encode_ordinary(example['text']) # encode_ordinary ignores any special tokens
+        ids.append(enc.eot_token) # add the end of text token, e.g. 50256 for gpt2 bpe
+        # note: I think eot should be prepended not appended... hmm. it's called "eot" though...
+        out = {'ids': ids, 'len': len(ids)}
+        return out
 
-        if idx >= total_tokens:
-            break
+    # tokenize the dataset
+    tokenized = split_dataset.map(
+        process,
+        remove_columns=['text'],
+        desc="tokenizing the splits",
+        num_proc=num_proc,
+    )
 
-    # flush any remainder
-    if buf and idx < total_tokens:
-        arr[idx : idx + len(buf)] = np.array(buf, dtype=np.uint16)
-        idx += len(buf)
-        pbar.update(len(buf))
-        buf.clear()
+    # concatenate all the ids in each dataset into one large file we can use for training
+    for split, dset in tokenized.items():
+        arr_len = np.sum(dset['len'], dtype=np.uint64)
+        filename = os.path.join(os.path.dirname(__file__), f'{split}.bin')
+        dtype = np.uint16 # (can do since enc.max_token_value == 50256 is < 2**16)
+        arr = np.memmap(filename, dtype=dtype, mode='w+', shape=(arr_len,))
+        total_batches = 1024
 
-    arr.flush()
-    pbar.close()
-    return idx
+        idx = 0
+        for batch_idx in tqdm(range(total_batches), desc=f'writing {filename}'):
+            # Batch together samples for faster write
+            batch = dset.shard(num_shards=total_batches, index=batch_idx, contiguous=True).with_format('numpy')
+            arr_batch = np.concatenate(batch['ids'])
+            # Write into mmap
+            arr[idx : idx + len(arr_batch)] = arr_batch
+            idx += len(arr_batch)
+        arr.flush()
 
-def main():
-    import argparse
-    parser = argparse.ArgumentParser(description="Prepare C4 (en) into train.bin/val.bin in nanoGPT-style.")
-    parser.add_argument("--out-dir", type=str, default="data/c4", help="Output directory for .bin and meta.pkl")
-    parser.add_argument("--config", type=str, default="en", help="C4 configuration (e.g., 'en', 'en.noclean')")
-    parser.add_argument("--train-tokens", type=int, default=30_000_000_000, help="Approximate number of training tokens to write")
-    parser.add_argument("--val-tokens", type=int, default=10_000_000, help="Approximate number of validation tokens to write")
-    parser.add_argument("--seed", type=int, default=1337, help="Shuffle seed (only impacts streaming shuffle)")
-    parser.add_argument("--shuffle-buffer", type=int, default=0, help="Buffer size for streaming shuffle; set >0 to enable shuffling")
-    parser.add_argument("--write-batch", type=int, default=1_000_000, help="How many tokens to batch together before each memmap write")
-    args = parser.parse_args()
+    # train.bin is ~17GB, val.bin ~8.5MB
+    # train has ~9B tokens (9,035,582,198)
+    # val has ~4M tokens (4,434,897)
 
-    os.makedirs(args.out_dir, exist_ok=True)
-
-    # tokenizer setup
-    enc = tiktoken.get_encoding("gpt2")
-    eot_id = _get_eot_id(enc)
-    assert enc.n_vocab <= 65535, f"Vocab too large for uint16: {enc.n_vocab}"
-    assert 0 <= eot_id < 65536, f"EOT id out of range for uint16: {eot_id}"
-
-    # count passes (to pre-allocate memmaps)
-    train_total = _count_tokens_for_split(args.config, "train", args.train_tokens, enc, args.seed, args.shuffle_buffer)
-    val_total   = _count_tokens_for_split(args.config, "validation", args.val_tokens, enc, args.seed, args.shuffle_buffer)
-
-    # write passes
-    train_path = os.path.join(args.out_dir, "train.bin")
-    val_path   = os.path.join(args.out_dir, "val.bin")
-
-    wrote_train = _write_split(args.config, "train", train_path, train_total, enc, args.seed, args.shuffle_buffer, args.write_batch)
-    wrote_val   = _write_split(args.config, "validation", val_path, val_total, enc, args.seed, args.shuffle_buffer, args.write_batch)
-
-    # meta (kept similar to template)
-    meta = {
-        "dataset": "c4",
-        "config": args.config,
-        "tokenizer": "tiktoken/gpt2",
-        "vocab_size": enc.n_vocab,
-        "eot_token_id": eot_id,
-        "train_tokens": int(wrote_train),
-        "val_tokens": int(wrote_val),
-    }
-    with open(os.path.join(args.out_dir, "meta.pkl"), "wb") as f:
-        pickle.dump(meta, f)
-
-    # helpful prints, similar to template comments
-    train_gb = wrote_train * 2 / (1024**3)
-    val_mb = wrote_val * 2 / (1024**2)
-    print(f"train.bin ~{train_gb:.2f} GB ({wrote_train:,} tokens)")
-    print(f"val.bin   ~{val_mb:.2f} MB ({wrote_val:,} tokens)")
-
-if __name__ == "__main__":
-    main()
+    # to read the bin files later, e.g. with numpy:
+    # m = np.memmap('train.bin', dtype=np.uint16, mode='r')
