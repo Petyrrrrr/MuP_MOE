@@ -241,7 +241,7 @@ class Trainer:
             lr = get_lr_fn(iter_num)
             for param_group in self.optimizer.param_groups:
                 if param_group.get('is_router', False):
-                    param_group['lr'] = self.router_lr_mult * lr / math.sqrt(self.n_embd)
+                    param_group['lr'] = self.router_lr_mult * lr * param_group.get('lr_scale', 1.0)
                 else:
                     param_group['lr'] = lr * param_group.get('lr_scale', 1.0)
             

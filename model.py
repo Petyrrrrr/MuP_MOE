@@ -250,15 +250,12 @@ class MLP_MOE(nn.Module):
         """Update router bias to encourage balanced expert usage with optional momentum"""
         gradient = avg_usage - target_usage  # (n_exp,)
         
-        if self.moe_bias_momentum_enabled and not disable_momentum:
+        if self.moe_bias_momentum_enabled:
             # Update momentum buffer (EMA of gradients)
             self.bias_momentum_buffer = (self.moe_bias_momentum * self.bias_momentum_buffer + 
                                         (1 - self.moe_bias_momentum) * gradient)
             # Apply smoothed gradient
             self.bias.data -= lr_bias * self.bias_momentum_buffer
-        else:
-            # Direct gradient update (original behavior)
-            self.bias.data -= lr_bias * gradient
 
 class Block(nn.Module):
 
@@ -585,7 +582,7 @@ class GPT(nn.Module):
                 optim_groups.append({
                     'params': [router_param],
                     'weight_decay': weight_decay,
-                    'lr_scale': 1,  # Will be dynamically adjusted in training loop
+                    'lr_scale': 1/self.config.mup_width_multiplier,
                     'is_router': True,
                     'layer_idx': layer_idx
                 })

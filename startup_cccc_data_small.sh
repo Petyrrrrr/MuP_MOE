@@ -5,6 +5,7 @@ set -euo pipefail
 # Paths
 PROJ="/home/ubuntu/MuP_MOE"
 VENV="$PROJ/venv"
+SCRIPT="$PROJ/data/cccc/prepare_limited_large_disk.py"
 
 echo "==> Activating venv at $VENV"
 # Create venv if missing
@@ -25,3 +26,6 @@ export HF_DATASETS_TRUST_REMOTE_CODE=1
 
 # Optional: faster downloads
 export HF_HUB_ENABLE_HF_TRANSFER=1
+
+echo "==> Running $SCRIPT"
+python "$SCRIPT" "$@"

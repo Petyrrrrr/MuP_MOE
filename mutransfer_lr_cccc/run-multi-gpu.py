@@ -100,7 +100,7 @@ class MultiGPURunner:
 
         widths = [512, 256]
         num_exps = [16, 8, 4, 2]
-        lrs = [0.128, 0.064, 0.032, 0.016, 0.008, 0.004, 0.002, 0.001]
+        lrs = [0.128, 0.064, 0.032, 0.016, 0.008, 0.004, 0.002]
         seeds = [1]
         max_iters = 5000  # Configuration parameter for max iterations
         warmup_iters = 2000  # Configuration parameter for warmup iterations

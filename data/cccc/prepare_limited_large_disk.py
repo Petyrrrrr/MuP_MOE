@@ -41,13 +41,49 @@ if __name__ == '__main__':
                         help='Maximum number of tokens to process in billions (default: 10.0)')
     parser.add_argument('--no_limit', action='store_true',
                         help='Process the entire dataset without token limit')
+    parser.add_argument('--dataset_fraction', type=float, default=0.25,
+                        help='Fraction of dataset to download (0.0-1.0, default: 1.0 for full dataset)')
     args = parser.parse_args()
     
     print(f"Using cache directory: {os.environ['HF_DATASETS_CACHE']}")
     print(f"Available space on /mnt/local: {os.statvfs('/mnt/local').f_bavail * os.statvfs('/mnt/local').f_frsize / (1024**4):.2f} TB")
     
     print(f"\nLoading C4 dataset...")
-    dataset = load_dataset("c4", "en", num_proc=num_proc_load_dataset)
+    
+    # Use streaming to limit download if fraction < 1.0
+    if args.dataset_fraction < 1.0:
+        print(f"Using streaming mode to download only {args.dataset_fraction*100:.1f}% of the dataset")
+        
+        # Load with streaming
+        dataset_stream = load_dataset("c4", "en", streaming=True)
+        
+        # Estimate total size (C4 has ~365M examples in train)
+        estimated_train_size = 365_000_000
+        estimated_val_size = 365_000
+        
+        train_limit = int(estimated_train_size * args.dataset_fraction)
+        val_limit = int(estimated_val_size * args.dataset_fraction)
+        
+        print(f"Taking first {train_limit:,} train examples and {val_limit:,} validation examples")
+        
+        # Take limited samples and convert to regular dataset
+        train_data = list(tqdm(dataset_stream['train'].take(train_limit), 
+                              total=train_limit, 
+                              desc="Downloading train data"))
+        val_data = list(tqdm(dataset_stream['validation'].take(val_limit),
+                           total=val_limit,
+                           desc="Downloading validation data"))
+        
+        # Convert to Dataset format
+        from datasets import Dataset
+        dataset = {
+            'train': Dataset.from_list(train_data),
+            'validation': Dataset.from_list(val_data)
+        }
+    else:
+        # Load full dataset as before
+        dataset = load_dataset("c4", "en", num_proc=num_proc_load_dataset)
+        dataset = {'train': dataset['train'], 'validation': dataset['validation']}
     
     # Print dataset info
     print(f"Total number of examples in train: {len(dataset['train'])}")
@@ -86,19 +122,11 @@ if __name__ == '__main__':
         
         limited_train = dataset['train'].select(selected_indices)
         
-        # Create new dataset dict with limited train
-        dataset = {
-            'train': limited_train,
-            'validation': dataset['validation']
-        }
-    else:
-        dataset = {
-            'train': dataset['train'],
-            'validation': dataset['validation']
-        }
+        # Update dataset with limited train
+        dataset['train'] = limited_train
     
     # Split dataset
-    split_dataset = dataset['train'].train_test_split(test_size=0.002, seed=2357, shuffle=True)
+    split_dataset = dataset['train'].train_test_split(test_size=0.001, seed=2357, shuffle=True)
     split_dataset['val'] = split_dataset.pop('test') # rename the test split to val
 
     # we now want to tokenize the dataset. first define the encoding function (gpt2 bpe)
