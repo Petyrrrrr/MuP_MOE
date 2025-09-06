@@ -346,12 +346,7 @@ class GPT(nn.Module):
                 if pn.endswith('c_attn.weight') or pn.endswith('c_fc.weight'):
                     torch.nn.init.normal_(p, mean=0.0, std=config.init_std / math.sqrt(config.mup_width_multiplier))
                 elif pn.endswith('c_proj.weight'):
-                    # Handle both regular MLP and MOE experts
-                    if 'experts' in pn:
-                        # MOE expert output projection
-                        torch.nn.init.normal_(p, mean=0.0, std=config.init_std / math.sqrt(2 * config.n_layer * config.mup_width_multiplier))
-                    else:
-                        torch.nn.init.normal_(p, mean=0.0, std=config.init_std / math.sqrt(2 * config.n_layer * config.mup_width_multiplier))
+                    torch.nn.init.normal_(p, mean=0.0, std=config.init_std / math.sqrt(2 * config.n_layer * config.mup_width_multiplier))
                 elif pn.endswith('router.weight'):
                     # Router initialization
                     torch.nn.init.normal_(p, mean=0.0, std=config.init_std)
@@ -582,7 +577,7 @@ class GPT(nn.Module):
                 optim_groups.append({
                     'params': [router_param],
                     'weight_decay': weight_decay,
-                    'lr_scale': 1/self.config.mup_width_multiplier,
+                    'lr_scale': 1 / math.sqrt(self.config.mup_width_multiplier),
                     'is_router': True,
                     'layer_idx': layer_idx
                 })
