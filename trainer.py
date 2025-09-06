@@ -108,7 +108,7 @@ class Trainer:
                             })
                             # Update bias only if using bias method
                             if moe_load_balance_method == "bias":
-                                mlp_moe.update_router_bias(avg_usage, target_usage, moe_bias_lr, disable = iter_num > 4000)
+                                mlp_moe.update_router_bias(avg_usage, target_usage, moe_bias_lr, disable = False)
                             mlp_moe.tokens_per_expert.zero_()
                             mlp_moe.total_tokens.zero_()
         return moe_layer_stats
@@ -385,6 +385,28 @@ class Trainer:
                                 self.csv_logger.step()
                                 self.csv_logger.close()  # Ensure final row is written
                         print(f"Validation - step {iter_num}: val loss {losses['val']:.4f}")
+                        
+                        # Save router weights every 1000 iterations (including at max_iters)
+                        if collect_moe and iter_num % 1000 == 1:
+                            # Collect router weights from all layers
+                            router_weights = []
+                            for i, block in enumerate(self.raw_model.transformer.h):
+                                if hasattr(block, 'use_moe') and block.use_moe:
+                                    # Get router weight matrix (n_exp x n_embd)
+                                    router_weight = block.mlp.router.weight.detach().cpu().numpy()
+                                    router_weights.append(router_weight)
+                            
+                            if router_weights:
+                                # Stack into (depth x n_exp x n_embd) array
+                                router_weights_array = np.stack(router_weights, axis=0)
+                                
+                                
+                                assert router_weights_array.shape == (self.n_layer, self.num_exp, self.n_embd)
+                                
+                                # Save to run_data directory
+                                router_weights_path = os.path.join(self.out_dir, f'router_weights_iter_{iter_num}.npy')
+                                np.save(router_weights_path, router_weights_array)
+                                print(f"Router weights saved to {router_weights_path} (shape: {router_weights_array.shape})")
                         
                         # Print and save MOE expert usage statistics if collected
                         if collect_moe and 'moe_expert_usage' in losses:
