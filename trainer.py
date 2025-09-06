@@ -108,7 +108,7 @@ class Trainer:
                             })
                             # Update bias only if using bias method
                             if moe_load_balance_method == "bias":
-                                mlp_moe.update_router_bias(avg_usage, target_usage, moe_bias_lr, disable_momentum = iter_num > 2000)
+                                mlp_moe.update_router_bias(avg_usage, target_usage, moe_bias_lr, disable = iter_num > 4000)
                             mlp_moe.tokens_per_expert.zero_()
                             mlp_moe.total_tokens.zero_()
         return moe_layer_stats

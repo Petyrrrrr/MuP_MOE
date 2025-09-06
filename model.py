@@ -196,7 +196,7 @@ class MLP_MOE(nn.Module):
         self.moe_bias_momentum_enabled = config.moe_bias_momentum_enabled if hasattr(config, 'moe_bias_momentum_enabled') else False
         
     def h_func(self, x):
-        return F.softmax(x, dim=-1)
+        return torch.sigmoid(x)
     
     def s_func(self, x):
         return torch.sigmoid(x)
@@ -209,8 +209,7 @@ class MLP_MOE(nn.Module):
         logit = self.router(x_flat) / math.sqrt(C)
        
         score = self.s_func(logit)  # (B*T, n_exp)
-        mu_add_bias = self.h_func(logit / self.tau) + self.bias  # (B*T, n_exp)
-        
+        mu_add_bias = self.h_func(logit / self.tau) + self.bias + 1e-8 * torch.randn_like(score)  # (B*T, n_exp)        
         # Top-k selection
         _, topk_indices = mu_add_bias.topk(self.num_act, dim=-1)  # (B*T, num_act)
         mask = torch.zeros_like(mu_add_bias)                      # (B*T, n_exp)
@@ -246,16 +245,17 @@ class MLP_MOE(nn.Module):
         else:
             return output, mask.detach()
     
-    def update_router_bias(self, avg_usage, target_usage, lr_bias, disable_momentum = False):
-        """Update router bias to encourage balanced expert usage with optional momentum"""
-        gradient = avg_usage - target_usage  # (n_exp,)
-        
-        if self.moe_bias_momentum_enabled:
-            # Update momentum buffer (EMA of gradients)
-            self.bias_momentum_buffer = (self.moe_bias_momentum * self.bias_momentum_buffer + 
-                                        (1 - self.moe_bias_momentum) * gradient)
-            # Apply smoothed gradient
-            self.bias.data -= lr_bias * self.bias_momentum_buffer
+    def update_router_bias(self, avg_usage, target_usage, lr_bias, disable = False):
+        gradient = torch.sign(avg_usage - target_usage)  # (n_exp,)
+        if not disable:
+            if self.moe_bias_momentum_enabled:
+                # Update momentum buffer (EMA of gradients)
+                self.bias_momentum_buffer = (self.moe_bias_momentum * self.bias_momentum_buffer + 
+                                            (1 - self.moe_bias_momentum) * gradient)
+                # Apply smoothed gradient
+                self.bias.data -= lr_bias * self.bias_momentum_buffer
+            else:
+                self.bias.data -= lr_bias * gradient
 
 class Block(nn.Module):
 

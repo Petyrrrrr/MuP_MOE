@@ -120,3 +120,5 @@ echo "npm:  $(npm -v)"
 
 
 sudo npm install -g @anthropic-ai/claude-code
+
+sudo npm install -g @openai/codex
