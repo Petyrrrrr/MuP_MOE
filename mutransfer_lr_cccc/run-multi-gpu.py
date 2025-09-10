@@ -99,25 +99,27 @@ class MultiGPURunner:
         configs = []
 
         widths = [512, 256]
-        num_exps = [16, 8, 4, 2]
-        lrs = [0.064, 0.032, 0.016, 0.008, 0.004]
-        seeds = [1]
-        max_iters = 5000  # Configuration parameter for max iterations
+        num_exps = [4, 8]
+        lrs = [0.02]
+        seeds = [0, 1, 2, 3, 4, 5, 6]
+        max_iters = 10000  # Configuration parameter for max iterations
         warmup_iters = 2000  # Configuration parameter for warmup iterations
         router_lr_mult = 1.0
+        router_lr_mult_list = [0.015625, 0.0625 , 0.25, 1.0, 4.0, 16.0, 64.0]
         bias_lr_mult = 1.0
         init_std = 0.02
-        moe_tau = 0.1
-        n_layer = 10
+        moe_tau = 0.02
+        n_layer = 14
         batch_size = 32
-        gradient_accumulation_steps = 16
+        gradient_accumulation_steps = 10
         t_ema = 10
-
+        bias_update_interval = 10
         for width in widths:
             for num_exp in num_exps:
                 for lr in lrs:
                     for seed in seeds:
                         weight_decay = t_ema / (max_iters * lr)
+                        router_lr_mult = router_lr_mult_list[seed]
                         config = {
                             'width': width,
                             'num_exp': num_exp,
@@ -128,17 +130,18 @@ class MultiGPURunner:
                             'min_lr': lr,
                             'mup_base_width': 256,
                             'mup_width_multiplier': width / 256,
-                            'num_act': num_exp // 2,
+                            'num_act': num_exp // 4,
                             'n_layer': n_layer,
                             'max_iters': max_iters,
                             'warmup_iters': warmup_iters,  
                             'router_lr_mult': router_lr_mult,  
-                            'moe_bias_lr' : lr * bias_lr_mult,
+                            'moe_bias_lr' : 1e-2,
                             'moe_tau' : moe_tau,
                             'init_std' : init_std,
                             'gradient_accumulation' : gradient_accumulation_steps,
                             'batch_size' : batch_size,
                             'weight_decay' : weight_decay,
+                            'bias_update_interval' : bias_update_interval,
                         }
                         configs.append(config)
         
@@ -189,7 +192,7 @@ class MultiGPURunner:
             f"--num_act={config['num_act']}",
             f"--moe_tau={config['moe_tau']}",
             f"--moe_bias_lr={config['moe_bias_lr']}",
-            "--moe_bias_momentum=0.9",
+            "--moe_bias_momentum=0.5",
             f"--router_lr_mult={config.get('router_lr_mult', 1.0)}",
             "--moe_bias_momentum_enabled=True",
             "--moe_load_balance_method=bias",
@@ -198,7 +201,8 @@ class MultiGPURunner:
             "--backend=nccl",
             "--device=cuda",
             "--dtype=bfloat16",
-            "--compile=False"
+            "--compile=False",
+            f"--bias_update_interval={config['bias_update_interval']}"
         ]
         
         return cmd_args, out_dir

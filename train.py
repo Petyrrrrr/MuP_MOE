@@ -100,6 +100,7 @@ moe_aux_loss_weight = 0.01 # Auxiliary loss coefficient (only used with aux_loss
 router_lr_mult = 1.0 # Multiplier for router learning rate (default 1.0)
 alpha = 4.0 # Hidden layer size multiplier (hidden_size = alpha * n_embd)
 max_nan_losses = 50 # Maximum number of NaN losses before raising error
+bias_update_interval = 1 # Update bias every n iterations
 # seed
 seed = 1337
 # DDP settings
@@ -176,7 +177,7 @@ model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=bloc
                   mup_output_alpha=mup_output_alpha, num_exp=num_exp, num_act=num_act,
                   moe_tau=moe_tau, moe_bias_lr=moe_bias_lr, moe_bias_momentum=moe_bias_momentum,
                   moe_bias_momentum_enabled=moe_bias_momentum_enabled, moe_load_balance_method=moe_load_balance_method,
-                  moe_aux_loss_weight=moe_aux_loss_weight, alpha=alpha) # start with model_args from command line
+                  moe_aux_loss_weight=moe_aux_loss_weight, alpha=alpha, max_iters=max_iters, bias_update_interval=bias_update_interval) # start with model_args from command line
 
 if init_from == 'scratch':
     # init a new model from scratch

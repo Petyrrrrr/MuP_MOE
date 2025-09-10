@@ -67,6 +67,7 @@ class Trainer:
         self.router_lr_mult = config.get('router_lr_mult', 1.0)  # Default to 1.0 if not specified
         self.skip_val_loss = config['skip_val_loss']
         self.max_nan_losses = config.get('max_nan_losses', 50)  # Default to 50 if not specified
+        self.bias_update_interval = config.get('bias_update_interval')
         
         # Get raw model (unwrap DDP if needed)
         self.raw_model = model.module if self.ddp else model
@@ -93,7 +94,7 @@ class Trainer:
                 for i, block in enumerate(raw_model.transformer.h):
                     if hasattr(block, 'use_moe') and block.use_moe:
                         mlp_moe = block.mlp
-                        if mlp_moe.total_tokens > 0:
+                        if mlp_moe.total_tokens > 0 and iter_num % self.bias_update_interval == self.bias_update_interval - 1:
                             # Calculate average usage per expert
                             avg_usage = mlp_moe.tokens_per_expert / mlp_moe.total_tokens
                             target_usage = mlp_moe.num_act / mlp_moe.n_exp
@@ -108,7 +109,7 @@ class Trainer:
                             })
                             # Update bias only if using bias method
                             if moe_load_balance_method == "bias":
-                                mlp_moe.update_router_bias(avg_usage, target_usage, moe_bias_lr, disable = False)
+                                mlp_moe.update_router_bias(avg_usage, target_usage, moe_bias_lr, iter_num, disable = False)
                             mlp_moe.tokens_per_expert.zero_()
                             mlp_moe.total_tokens.zero_()
         return moe_layer_stats

@@ -177,12 +177,13 @@ class MLP_MOE(nn.Module):
         self.config = config
         self.n_exp = config.num_exp
         self.num_act = config.num_act  # top_k
-        self.tau = config.moe_tau if hasattr(config, 'moe_tau') else 1.0
-        
+        self.null_reg = self.num_act / self.n_exp
+        self.tau = config.moe_tau
+        self.max_iter = config.max_iters
         # Router
         self.router = nn.Linear(config.n_embd, self.n_exp, bias=False)
         self.bias = nn.Parameter(torch.zeros(self.n_exp))
-        
+        self.dtype = torch.bfloat16
         # Experts
         self.experts = nn.ModuleList([Expert(config) for _ in range(self.n_exp)])
         
@@ -192,28 +193,30 @@ class MLP_MOE(nn.Module):
         
         # Momentum buffer for bias gradients (EMA of gradients)
         self.register_buffer('bias_momentum_buffer', torch.zeros(self.n_exp))
-        self.moe_bias_momentum = config.moe_bias_momentum if hasattr(config, 'moe_bias_momentum') else 0.9
-        self.moe_bias_momentum_enabled = config.moe_bias_momentum_enabled if hasattr(config, 'moe_bias_momentum_enabled') else False
+        self.moe_bias_momentum = config.moe_bias_momentum
+        self.moe_bias_momentum_enabled = config.moe_bias_momentum_enabled 
         
     def h_func(self, x):
-        return torch.sigmoid(x)
+        return torch.sigmoid(x).to(x.dtype)
     
     def s_func(self, x):
-        return torch.sigmoid(x)
+        return F.softmax(x, dim=-1).to(x.dtype)
     
     def forward(self, x):
         B, T, C = x.shape
         x_flat = x.view(-1, C)  # (B*T, C)
-        
+        x_flat = x_flat.to(self.dtype)
         # Router forward pass
         logit = self.router(x_flat) / math.sqrt(C)
-       
-        score = self.s_func(logit)  # (B*T, n_exp)
-        mu_add_bias = self.h_func(logit / self.tau) + self.bias + 1e-8 * torch.randn_like(score)  # (B*T, n_exp)        
-        # Top-k selection
+        score = self.s_func(logit / self.tau)  # (B*T, n_exp)
+        mu_add_bias = self.h_func(logit / self.tau) + self.bias + 1e-9 * torch.randn_like(score)  # (B*T, n_exp)        
         _, topk_indices = mu_add_bias.topk(self.num_act, dim=-1)  # (B*T, num_act)
-        mask = torch.zeros_like(mu_add_bias)                      # (B*T, n_exp)
-        mask.scatter_(1, topk_indices, 1)
+
+        selected = score.gather(-1, topk_indices).to(score.dtype)  # (B*T, num_act)
+        selected = selected / (selected.sum(-1, keepdim=True) + self.null_reg).to(score.dtype) #normalize experts
+
+        score = torch.zeros_like(score).scatter(1, topk_indices, selected)
+        mask  = torch.zeros_like(score).scatter(1, topk_indices, 1.0)
 
         # === Compute-sparse expert evaluation ===
         act_mask = mask.detach()                  # don't backprop through selection
@@ -245,17 +248,17 @@ class MLP_MOE(nn.Module):
         else:
             return output, mask.detach()
     
-    def update_router_bias(self, avg_usage, target_usage, lr_bias, disable = False):
-        gradient = torch.sign(avg_usage - target_usage)  # (n_exp,)
+    def update_router_bias(self, avg_usage, target_usage, lr_bias, iter_num, disable = False):
+        gradient = (avg_usage - target_usage)  # (n_exp,)
         if not disable:
             if self.moe_bias_momentum_enabled:
                 # Update momentum buffer (EMA of gradients)
                 self.bias_momentum_buffer = (self.moe_bias_momentum * self.bias_momentum_buffer + 
                                             (1 - self.moe_bias_momentum) * gradient)
                 # Apply smoothed gradient
-                self.bias.data -= lr_bias * self.bias_momentum_buffer
+                self.bias.data -= lr_bias * (self.bias_momentum_buffer)
             else:
-                self.bias.data -= lr_bias * gradient
+                self.bias.data -= lr_bias * (gradient)
 
 class Block(nn.Module):
 
@@ -313,7 +316,8 @@ class GPTConfig:
     moe_load_balance_method: str = "bias" # "bias" or "aux_loss" - method for load balancing
     moe_aux_loss_weight: float = 0.01 # Auxiliary loss coefficient (only used with aux_loss method)
     alpha: float = 4.0 # Hidden layer size multiplier (hidden_size = alpha * n_embd)
-
+    max_iters: int = 12000 # Maximum number of training iterations (used for bias decay)
+    bias_update_interval: int = 100 # Update bias every n iterations
 class GPT(nn.Module):
 
     def __init__(self, config):
