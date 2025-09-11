@@ -110,6 +110,8 @@ class Trainer:
                             # Update bias only if using bias method
                             if moe_load_balance_method == "bias":
                                 mlp_moe.update_router_bias(avg_usage, target_usage, moe_bias_lr, iter_num, disable = False)
+                            elif moe_load_balance_method == "aux_loss":
+                                pass
                             mlp_moe.tokens_per_expert.zero_()
                             mlp_moe.total_tokens.zero_()
         return moe_layer_stats
@@ -139,7 +141,7 @@ class Trainer:
         else:
             return None, None
     
-    def training_step(self, X, Y, iter_num, scaler, ctx, gradient_accumulation_steps, grad_clip):
+    def training_step(self, iter_num, scaler, ctx, gradient_accumulation_steps, grad_clip, get_batch_fn):
         """
         Execute forward/backward pass with gradient accumulation.
         
@@ -148,7 +150,7 @@ class Trainer:
         """
         loss = None
         grad_norm = None
-        
+        loss_sum = 0.0
         # Setup coordinate checking if enabled and first iteration
         coord_check_dict = None
         if iter_num % self.log_interval == 0:
@@ -159,15 +161,14 @@ class Trainer:
         # forward backward update, with optional gradient accumulation to simulate larger batch size
         for micro_step in range(gradient_accumulation_steps):
             if self.ddp:
-                # in DDP training we only need to sync gradients at the last micro step.
                 self.model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1)
+            X, Y = get_batch_fn('train')  # NEW: different micro-batch each micro-step
             with ctx:
                 logits, loss = self.model(X, Y)
-                # Only expect single loss (bias method or no MOE)
+                loss_sum += loss.item()
                 loss_for_backward = loss / gradient_accumulation_steps
-            # backward pass, with gradient scaling if training in fp16
-            scaler.scale(loss_for_backward).backward()
-        
+                # backward pass, with gradient scaling if training in fp16
+                scaler.scale(loss_for_backward).backward()
         # clip the gradient
         if grad_clip != 0.0:
             scaler.unscale_(self.optimizer)
@@ -192,7 +193,7 @@ class Trainer:
             for handle in coord_check_handles:
                 handle.remove()
         
-        return loss, coord_check_dict, grad_norm
+        return loss_sum/gradient_accumulation_steps, coord_check_dict, grad_norm
     
     def run_training_loop(self, get_batch_fn, estimate_loss_fn, get_lr_fn):
         """
@@ -216,7 +217,6 @@ class Trainer:
             self.wandb_run = self.config.get('wandb_run')
         
         # Initialize for training loop
-        X, Y = get_batch_fn('train')  # fetch the very first batch
         t0 = time.time()
         local_iter_num = 0  # number of iterations in the lifetime of this process
         running_mfu = -1.0
@@ -295,17 +295,15 @@ class Trainer:
                 break
             
             # Perform training step
-            loss, coord_check_dict, grad_norm = self.training_step(
-                X, Y, iter_num, self.scaler, self.ctx, 
-                self.gradient_accumulation_steps, self.grad_clip
+            loss, coord_check_dict, grad_norm = self.training_step(iter_num, self.scaler, self.ctx, 
+                self.gradient_accumulation_steps, self.grad_clip, get_batch_fn
             )
             
             # Store coord check dict for next eval
             if coord_check_dict is not None:
                 self._last_coord_check_dict = coord_check_dict
             
-            # immediately async prefetch next batch while model is doing computations on the GPU
-            X, Y = get_batch_fn('train')
+
             
             # Update router biases for MOE layers and collect stats for tqdm
             moe_layer_stats = self.update_moe_stats(
