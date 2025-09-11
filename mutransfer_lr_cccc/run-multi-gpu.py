@@ -98,15 +98,13 @@ class MultiGPURunner:
         """Generate all configurations to run."""
         configs = []
 
-        widths = [512, 256]
-        num_exps = [4, 8]
-        lrs = [0.02]
-        seeds = [0, 1, 2, 3, 4, 5, 6]
+        widths = [256, 512]
+        num_exps = [4, 8, 16,]
+        lrs = [0.005, 0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64]
+        seeds = [0]
         max_iters = 10000  # Configuration parameter for max iterations
         warmup_iters = 2000  # Configuration parameter for warmup iterations
-        router_lr_mult = 1.0
-        router_lr_mult_list = [0.015625, 0.0625 , 0.25, 1.0, 4.0, 16.0, 64.0]
-        bias_lr_mult = 1.0
+        router_lr_mult = 0.25
         init_std = 0.02
         moe_tau = 0.02
         n_layer = 14
@@ -119,7 +117,6 @@ class MultiGPURunner:
                 for lr in lrs:
                     for seed in seeds:
                         weight_decay = t_ema / (max_iters * lr)
-                        router_lr_mult = router_lr_mult_list[seed]
                         config = {
                             'width': width,
                             'num_exp': num_exp,

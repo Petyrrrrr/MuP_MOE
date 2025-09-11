@@ -162,6 +162,7 @@ class Trainer:
         for micro_step in range(gradient_accumulation_steps):
             if self.ddp:
                 self.model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1)
+            
             X, Y = get_batch_fn('train')  # NEW: different micro-batch each micro-step
             with ctx:
                 logits, loss = self.model(X, Y)
@@ -181,7 +182,8 @@ class Trainer:
                     print("WARNING: Gradient norm is NaN!")
                 elif total_norm > grad_clip * 2:
                     print(f"WARNING: Large gradient norm {total_norm:.2f} (clip={grad_clip})")
-        
+                if total_norm > 1e5:
+                    raise Exception(f"Gradient norm {total_norm:.2f} is too large, exceeding 1e5")
         # step the optimizer and scaler if training in fp16
         scaler.step(self.optimizer)
         scaler.update()
@@ -321,7 +323,7 @@ class Trainer:
             t0 = t1
             if iter_num % self.log_interval == 0 and self.master_process:
                 # get loss as float. note: this is a CPU-GPU sync point
-                lossf = loss.item() if loss is not None else float('nan')
+                lossf = float(loss) if isinstance(loss, (float, int)) else (loss.item() if loss is not None else float('nan'))
                 if local_iter_num >= 5:  # let the training loop settle a bit
                     mfu = self.raw_model.estimate_mfu(self.config['batch_size'] * self.gradient_accumulation_steps, dt)
                     running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
