@@ -29,3 +29,5 @@ export HF_HUB_ENABLE_HF_TRANSFER=1
 
 echo "==> Running $SCRIPT"
 python "$SCRIPT" "$@"
+
+cp -r /home/ubuntu/MuP_MOE/data/openwebtext /mnt/linky/MuP_MOE/data/openwebtext
