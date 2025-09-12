@@ -15,6 +15,7 @@ from typing import Union, Optional, Tuple
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+from utils import router_mult, bias_mult
 
 def load_balancing_loss_func(
     gate_logits: Union[torch.Tensor, Tuple[torch.Tensor, ...], None],
@@ -256,9 +257,9 @@ class MLP_MOE(nn.Module):
                 self.bias_momentum_buffer = (self.moe_bias_momentum * self.bias_momentum_buffer + 
                                             (1 - self.moe_bias_momentum) * gradient)
                 # Apply smoothed gradient
-                self.bias.data -= lr_bias * (self.bias_momentum_buffer)
+                self.bias.data -= lr_bias * (self.bias_momentum_buffer) * bias_mult(iter_num, self.max_iter)
             else:
-                self.bias.data -= lr_bias * (gradient)
+                self.bias.data -= lr_bias * (gradient) * bias_mult(iter_num, self.max_iter)
 
 class Block(nn.Module):
 
