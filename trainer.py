@@ -148,6 +148,8 @@ class Trainer:
         Returns:
             Tuple of (loss, coord_check_dict, grad_norm) for logging
         """
+        #set model to train
+        self.model.train()
         loss = None
         grad_norm = None
         loss_sum = 0.0
@@ -249,49 +251,49 @@ class Trainer:
                     param_group['lr'] = lr * param_group.get('lr_scale', 1.0)
             
             # evaluate the loss on train/val sets and write checkpoints
-            if iter_num % self.eval_interval == 0 and self.master_process:
-                losses = estimate_loss_fn()
-                if np.isnan(losses['train']):
-                    self.nan_loss_count += 1
-                    if self.nan_loss_count > self.max_nan_losses:
-                        raise Exception(f'NaN loss encountered {self.nan_loss_count} times, exceeding max_nan_losses={self.max_nan_losses}')
-                    print(f"Warning: NaN loss detected ({self.nan_loss_count}/{self.max_nan_losses}), skipping update and continuing training")
-                    iter_num += 1
-                    continue
+            # if iter_num % self.eval_interval == 0 and self.master_process:
+            #     losses = estimate_loss_fn()
+            #     if np.isnan(losses['train']):
+            #         self.nan_loss_count += 1
+            #         if self.nan_loss_count > self.max_nan_losses:
+            #             raise Exception(f'NaN loss encountered {self.nan_loss_count} times, exceeding max_nan_losses={self.max_nan_losses}')
+            #         print(f"Warning: NaN loss detected ({self.nan_loss_count}/{self.max_nan_losses}), skipping update and continuing training")
+            #         iter_num += 1
+            #         continue
                 
-                log_dict = {
-                    "iter": iter_num,
-                    "train/loss": losses['train'],
-                    "val/loss": losses['val'],
-                    "lr": lr,
-                    "mfu": running_mfu*100,  # convert to percentage
-                }
+            #     log_dict = {
+            #         "iter": iter_num,
+            #         "train/loss": losses['train'],
+            #         "val/loss": losses['val'],
+            #         "lr": lr,
+            #         "mfu": running_mfu*100,  # convert to percentage
+            #     }
                 
-                # Add coordinate check logging if enabled
-                if self.mup_enable_coord_check_logging and hasattr(self, '_last_coord_check_dict'):
-                    if self._last_coord_check_dict is not None:
-                        for key in self._last_coord_check_dict:
-                            log_dict[key + '_act_abs_mean'] = np.mean(self._last_coord_check_dict[key])
+            #     # Add coordinate check logging if enabled
+            #     if self.mup_enable_coord_check_logging and hasattr(self, '_last_coord_check_dict'):
+            #         if self._last_coord_check_dict is not None:
+            #             for key in self._last_coord_check_dict:
+            #                 log_dict[key + '_act_abs_mean'] = np.mean(self._last_coord_check_dict[key])
                 
-                if self.wandb_log and self.wandb_run:
-                    self.wandb_run.log(log_dict)
-                if self.csv_log and self.csv_logger:
-                    self.csv_logger.log(log_dict)
-                    self.csv_logger.step()
+            #     if self.wandb_log and self.wandb_run:
+            #         self.wandb_run.log(log_dict)
+            #     if self.csv_log and self.csv_logger:
+            #         self.csv_logger.log(log_dict)
+            #         self.csv_logger.step()
                 
-                if (not self.never_save_checkpoint) and (losses['val'] < best_val_loss or self.always_save_checkpoint):
-                    best_val_loss = losses['val']
-                    if iter_num > 0:
-                        checkpoint = {
-                            'model': self.raw_model.state_dict(),
-                            'optimizer': self.optimizer.state_dict(),
-                            'model_args': model_args,
-                            'iter_num': iter_num,
-                            'best_val_loss': best_val_loss,
-                            'config': self.config,
-                        }
-                        print(f"saving checkpoint to {self.out_dir}")
-                        torch.save(checkpoint, os.path.join(self.out_dir, 'ckpt.pt'))
+            #     if (not self.never_save_checkpoint) and (losses['val'] < best_val_loss or self.always_save_checkpoint):
+            #         best_val_loss = losses['val']
+            #         if iter_num > 0:
+            #             checkpoint = {
+            #                 'model': self.raw_model.state_dict(),
+            #                 'optimizer': self.optimizer.state_dict(),
+            #                 'model_args': model_args,
+            #                 'iter_num': iter_num,
+            #                 'best_val_loss': best_val_loss,
+            #                 'config': self.config,
+            #             }
+            #             print(f"saving checkpoint to {self.out_dir}")
+            #             torch.save(checkpoint, os.path.join(self.out_dir, 'ckpt.pt'))
             
             if iter_num == 0 and self.eval_only:
                 break

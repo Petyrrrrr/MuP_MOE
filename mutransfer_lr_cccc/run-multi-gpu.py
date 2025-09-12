@@ -99,8 +99,8 @@ class MultiGPURunner:
         configs = []
 
         widths = [256, 512]
-        num_exps = [4, 8, 16,]
-        lrs = [0.005, 0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64]
+        num_exps = [4, 8, 16]
+        lrs = [0.0025, 0.005, 0.01, 0.02, 0.04]
         seeds = [0]
         max_iters = 10000  # Configuration parameter for max iterations
         warmup_iters = 2000  # Configuration parameter for warmup iterations
@@ -153,7 +153,7 @@ class MultiGPURunner:
             f"--out_dir={out_dir}",
             "--eval_interval=1",
             "--log_interval=1",
-            "--eval_iters=1",
+            "--eval_iters=200",
             "--eval_only=False",
             "--skip_val_loss=True",
             "--always_save_checkpoint=False",
@@ -189,7 +189,7 @@ class MultiGPURunner:
             f"--num_act={config['num_act']}",
             f"--moe_tau={config['moe_tau']}",
             f"--moe_bias_lr={config['moe_bias_lr']}",
-            "--moe_bias_momentum=0.5",
+            "--moe_bias_momentum=0.8",
             f"--router_lr_mult={config.get('router_lr_mult', 1.0)}",
             "--moe_bias_momentum_enabled=True",
             "--moe_load_balance_method=bias",
