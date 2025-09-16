@@ -421,7 +421,8 @@ class Trainer:
                                 target_usage = self.raw_model.transformer.h[i].mlp.num_act / self.raw_model.transformer.h[i].mlp.n_exp
                                 usage_str = ','.join([f'{u:.3f}' for u in layer_usage])
                                 bias_str = ','.join([f'{b:.3f}' for b in self.raw_model.transformer.h[i].mlp.bias.tolist()])
-                                print(f"L{i}: usage[{usage_str}] bias[{bias_str}] target={target_usage:.3f}")
+                                max_deviation = max(abs(u - target_usage) for u in layer_usage)
+                                print(f"L{i}: usage[{usage_str}] bias[{bias_str}] target={target_usage:.3f} max_deviation={max_deviation:.3f}")
                             
                             # Save expert usage matrix to CSV (num_layers x num_experts format)
                             if iter_num > self.max_iters:
