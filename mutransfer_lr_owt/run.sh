@@ -92,7 +92,7 @@ do
                     --dtype='bfloat16' \
                     --compile=False \
                     --bias_update_interval=$bias_update_interval \
-                    >> /mnt/linky/outlog_0917
+                    >> /mnt/linky/outlog_${timestamp}
             done
         done
     done

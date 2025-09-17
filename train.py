@@ -256,7 +256,7 @@ def estimate_loss_wrapper(override_skip_val=None, collect_moe_stats=False):
     skip_val = override_skip_val if override_skip_val is not None else skip_val_loss
     # Get raw model for MOE stats collection
     raw_model = model.module if ddp else model
-    return estimate_loss(model, eval_iters, skip_val, get_batch_wrapper, ctx, collect_moe_stats, raw_model)
+    return estimate_loss(raw_model, eval_iters, skip_val, get_batch_wrapper, ctx, collect_moe_stats, raw_model)
 
 def get_lr_wrapper(it):
     return get_lr(it, learning_rate, warmup_iters, lr_decay_iters, max_iters, min_lr, decay_lr = decay_lr)

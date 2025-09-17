@@ -168,7 +168,7 @@ class Trainer:
             X, Y = get_batch_fn('train')  # NEW: different micro-batch each micro-step
             with ctx:
                 logits, loss = self.model(X, Y)
-                loss_sum += loss.item()
+                loss_sum += loss.detach()
                 loss_for_backward = loss / gradient_accumulation_steps
                 # backward pass, with gradient scaling if training in fp16
                 scaler.scale(loss_for_backward).backward()
@@ -197,7 +197,7 @@ class Trainer:
             for handle in coord_check_handles:
                 handle.remove()
         
-        return loss_sum/gradient_accumulation_steps, coord_check_dict, grad_norm
+        return (loss_sum/gradient_accumulation_steps).item(), coord_check_dict, grad_norm
     
     def run_training_loop(self, get_batch_fn, estimate_loss_fn, get_lr_fn):
         """
@@ -359,6 +359,9 @@ class Trainer:
             
             # termination conditions
             if iter_num > self.max_iters or iter_num % 1000 == 1:
+                if self.ddp:
+                    torch.distributed.barrier(device_ids=[self.ddp_settings['ddp_local_rank']])  # Sync before validation
+
                 # Perform validation sweep before ending training
                 if self.master_process:
                     print()
@@ -434,6 +437,8 @@ class Trainer:
                                     for layer_usage in expert_usage_matrix:
                                         writer.writerow([f'{usage:.6f}' for usage in layer_usage])
                                 print(f"Expert usage matrix saved to {val_csv_path}")
+                if self.ddp:
+                    torch.distributed.barrier(device_ids=[self.ddp_settings['ddp_local_rank']])  # Sync after validation
             if iter_num > self.max_iters:
                 break
         
