@@ -134,6 +134,7 @@ if ddp:
     # down the desired gradient accumulation iterations per process proportionally
     assert gradient_accumulation_steps % ddp_world_size == 0
     gradient_accumulation_steps //= ddp_world_size
+    config['gradient_accumulation_steps'] = gradient_accumulation_steps
 else:
     # if not ddp, we are running on a single gpu, and one process
     master_process = True

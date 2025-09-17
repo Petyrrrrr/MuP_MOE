@@ -39,7 +39,7 @@ do
                 num_act=$((num_exp/4))
                 weight_decay=$(echo "scale=8; $t_ema/($max_iters*$lr)" | bc -l)
 
-                out_dir="run_data/mutransfer_lr_owt/out_${timestamp}/width${width}_depth${n_layer}_experts${num_exp}_active${num_act}_seed${seed}_lr${lr}"
+                out_dir="run_data/mutransfer_lr_cccc/out_${timestamp}/width${width}_depth${n_layer}_experts${num_exp}_active${num_act}_seed${seed}_lr${lr}"
 
                 $LAUNCHER train.py \
                     --out_dir=$out_dir \
@@ -54,7 +54,7 @@ do
                     --wandb_log=False \
                     --csv_log=True \
                     --warmup_iters=$warmup_iters \
-                    --dataset='openwebtext' \
+                    --dataset='cccc' \
                     --gradient_accumulation_steps=$gradient_accumulation_steps \
                     --batch_size=$batch_size \
                     --block_size=1024 \
@@ -92,7 +92,7 @@ do
                     --dtype='bfloat16' \
                     --compile=False \
                     --bias_update_interval=$bias_update_interval \
-                    >> /mnt/linky/outlog_0917
+                    >> /mnt/linky/outlog_${timestamp}
             done
         done
     done

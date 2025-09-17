@@ -4,10 +4,10 @@ import torch
 import numpy as np
 
 def bias_mult(iter_num, max_iters):
-    return 1.0
+    return 0.0
 
 def router_mult(iter_num, max_iters):
-    return 1.0
+    return 0.0
 
 def get_batch(split, data_dir, block_size, batch_size, device_type, device):
     if split == 'train':

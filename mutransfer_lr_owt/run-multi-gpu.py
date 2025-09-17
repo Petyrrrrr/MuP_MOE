@@ -97,16 +97,15 @@ class MultiGPURunner:
     def generate_configurations(self) -> List[Dict]:
         """Generate all configurations to run."""
         configs = []
-
-        widths = [512, 256]
-        num_exps = [8]
-        lrs = [0.02]
-        seeds = [0, 1, 2, 3, 4, 5, 6]
+        wid_exp = [(256, 32),
+                   (512, 16),
+                   (1024, 8),
+                   (2048, 4)]
+        lrs = [0.0025, 0.005, 0.01, 0.02, 0.04]
+        seeds = [0]
         max_iters = 10000  # Configuration parameter for max iterations
         warmup_iters = 2000  # Configuration parameter for warmup iterations
-        router_lr_mult = 1.0
-        router_lr_mult_list = [0.015625, 0.0625 , 0.25, 1.0, 4.0, 16.0, 64.0]
-        bias_lr_mult = 1.0
+        router_lr_mult = 0.25
         init_std = 0.02
         moe_tau = 0.02
         n_layer = 14
@@ -114,12 +113,10 @@ class MultiGPURunner:
         gradient_accumulation_steps = 10
         t_ema = 10
         bias_update_interval = 10
-        for width in widths:
-            for num_exp in num_exps:
+        for width, num_exp in wid_exp:
                 for lr in lrs:
                     for seed in seeds:
                         weight_decay = t_ema / (max_iters * lr)
-                        router_lr_mult = router_lr_mult_list[seed]
                         config = {
                             'width': width,
                             'num_exp': num_exp,
@@ -156,7 +153,7 @@ class MultiGPURunner:
             f"--out_dir={out_dir}",
             "--eval_interval=1",
             "--log_interval=1",
-            "--eval_iters=1",
+            "--eval_iters=200",
             "--eval_only=False",
             "--skip_val_loss=True",
             "--always_save_checkpoint=False",
@@ -192,7 +189,7 @@ class MultiGPURunner:
             f"--num_act={config['num_act']}",
             f"--moe_tau={config['moe_tau']}",
             f"--moe_bias_lr={config['moe_bias_lr']}",
-            "--moe_bias_momentum=0.5",
+            "--moe_bias_momentum=0.8",
             f"--router_lr_mult={config.get('router_lr_mult', 1.0)}",
             "--moe_bias_momentum_enabled=True",
             "--moe_load_balance_method=bias",
