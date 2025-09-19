@@ -4,10 +4,13 @@ import torch
 import numpy as np
 
 def bias_mult(iter_num, max_iters):
-    return 0.0
+    return 1.0
 
 def router_mult(iter_num, max_iters):
-    return 0.0
+    return 1.0
+
+def bias_update(usage, target):
+    return (usage - target) * ( 0.1 + 0.9 * ( torch.abs(usage - target) > 0.5 * target) )
 
 def get_batch(split, data_dir, block_size, batch_size, device_type, device):
     if split == 'train':
@@ -101,8 +104,11 @@ def estimate_loss(model, eval_iters, skip_val_loss, get_batch_fn, ctx, collect_m
 
 def get_lr(it, learning_rate, warmup_iters, lr_decay_iters, max_iters, min_lr, decay_lr = False):
     if it <= warmup_iters:
-         return learning_rate * it / warmup_iters
-    return (learning_rate / 2) * (max_iters - it + 1) / (max_iters-warmup_iters+1) + learning_rate / 2
+        return learning_rate * it / warmup_iters
+    if it < max_iters * 0.7:
+        return learning_rate
+    else:
+        return learning_rate * np.exp(-(it - max_iters * 0.7) / (max_iters * 0.3))
     # if it > lr_decay_iters:
     #     return min_lr
     # decay_ratio = (it - warmup_iters) / (lr_decay_iters - warmup_iters)

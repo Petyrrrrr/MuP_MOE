@@ -97,22 +97,24 @@ class MultiGPURunner:
     def generate_configurations(self) -> List[Dict]:
         """Generate all configurations to run."""
         configs = []
-        wid_exp = [(256, 32),
-                   (512, 16),
-                   (1024, 8),
-                   (2048, 4)]
-        lrs = [0.0025, 0.005, 0.01, 0.02, 0.04]
+        wid_exp = [
+            (256, 16),
+            (1024, 4),
+            (256, 8),
+            (512, 4),
+            ]
+        lrs = [0.00037, 0.001111, 0.003333, 0.01, 0.03]
         seeds = [0]
         max_iters = 10000  # Configuration parameter for max iterations
-        warmup_iters = 2000  # Configuration parameter for warmup iterations
-        router_lr_mult = 0.25
+        warmup_iters = 500  # Configuration parameter for warmup iterations
+        router_lr_mult = 1.0
         init_std = 0.02
         moe_tau = 0.02
         n_layer = 14
-        batch_size = 32
-        gradient_accumulation_steps = 10
+        batch_size = 40
+        gradient_accumulation_steps = 8
         t_ema = 10
-        bias_update_interval = 10
+        bias_update_interval = 5
         for width, num_exp in wid_exp:
                 for lr in lrs:
                     for seed in seeds:

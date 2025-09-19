@@ -11,11 +11,11 @@ import math
 import inspect
 from dataclasses import dataclass
 from typing import Union, Optional, Tuple
-
+import numpy as np
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
-from utils import router_mult, bias_mult
+from utils import router_mult, bias_mult, bias_update
 
 def load_balancing_loss_func(
     gate_logits: Union[torch.Tensor, Tuple[torch.Tensor, ...], None],
@@ -219,18 +219,56 @@ class MLP_MOE(nn.Module):
         score = torch.zeros_like(score).scatter(1, topk_indices, selected)
         mask  = torch.zeros_like(score).scatter(1, topk_indices, 1.0)
 
-        # === Compute-sparse expert evaluation ===
-        act_mask = mask.detach()                  # don't backprop through selection
-        output   = torch.zeros_like(x_flat, dtype=score.dtype)       # (B*T, C)
+           # ===== Compute-sparse expert evaluation (optimized dispatch, same math) =====
+        N = x_flat.size(0)
+        K = self.num_act
+        output = torch.zeros_like(x_flat, dtype=score.dtype)  # (B*T, C), same dtype as before
 
-        for i, expert in enumerate(self.experts):
-            idx_i = act_mask[:, i].nonzero(as_tuple=True)[0]  # 1D indices of tokens routed to expert i
-            if idx_i.numel() == 0:
-                continue
-            x_i = x_flat.index_select(0, idx_i)              # (n_i, C)
-            y_i = expert(x_i)                                 # (n_i, C)  -- compute only on its tokens
-            g_i = score.index_select(0, idx_i)[:, i].unsqueeze(-1)  # (n_i, 1) sigmoid gates for expert i
-            output.index_add_(0, idx_i, (y_i * g_i).to(output.dtype))     
+        if K == 1:
+            # ---- Fast path: each token goes to exactly one expert; no accumulation needed ----
+            expert_ids = topk_indices.squeeze(1)                         # (N,)
+            gates      = selected.squeeze(1).to(output.dtype)            # (N,)
+
+            # Group tokens by expert id to call each expert once on a contiguous slice
+            sorted_ids, perm = torch.sort(expert_ids)                    # (N,)
+            x_sorted = x_flat.index_select(0, perm)                      # (N, C)
+            g_sorted = gates.index_select(0, perm)                       # (N,)
+
+            uniq, counts = torch.unique_consecutive(sorted_ids, return_counts=True)
+            out_sorted = torch.empty_like(x_sorted, dtype=output.dtype)
+
+            start = 0
+            for e_id, c in zip(uniq.tolist(), counts.tolist()):
+                sl = slice(start, start + c)
+                y  = self.experts[e_id](x_sorted[sl])                    # (c, C)
+                out_sorted[sl] = (y * g_sorted[sl].unsqueeze(-1)).to(output.dtype)
+                start += c
+
+            inv_perm = torch.empty_like(perm)
+            inv_perm[perm] = torch.arange(N, device=perm.device)
+            output = out_sorted.index_select(0, inv_perm)                # (N, C)
+        else:
+            # ---- General path: top-k > 1; accumulate contributions per token ----
+            expert_ids = topk_indices.reshape(-1)                        # (N*K,)
+            token_idx  = torch.arange(N, device=x_flat.device).repeat_interleave(K)  # (N*K,)
+            gates      = selected.reshape(-1).to(output.dtype)           # (N*K,)
+
+            # Sort by expert id so each expert gets a contiguous slice
+            sorted_ids, order = torch.sort(expert_ids)                   # (N*K,)
+            token_idx = token_idx.index_select(0, order)                 # (N*K,)
+            gates     = gates.index_select(0, order)                     # (N*K,)
+            x_gathered = x_flat.index_select(0, token_idx)               # (N*K, C)
+
+            uniq, counts = torch.unique_consecutive(sorted_ids, return_counts=True)
+
+            start = 0
+            for e_id, c in zip(uniq.tolist(), counts.tolist()):
+                sl  = slice(start, start + c)
+                y   = self.experts[e_id](x_gathered[sl])                 # (c, C)
+                w   = gates[sl].unsqueeze(-1)                            # (c, 1)
+                idx = token_idx[sl]                                      # (c,)
+                output.index_add_(0, idx, (y * w).to(output.dtype))
+                start += c
 
         output = output.view(B, T, C)
         
@@ -250,16 +288,19 @@ class MLP_MOE(nn.Module):
             return output, mask.detach()
     
     def update_router_bias(self, avg_usage, target_usage, lr_bias, iter_num, disable = False):
-        gradient = (avg_usage - target_usage)  # (n_exp,)
+        target_usage = target_usage
+        grad = bias_update(avg_usage, target_usage)  # (n_exp,)
         if not disable:
-            if self.moe_bias_momentum_enabled:
-                # Update momentum buffer (EMA of gradients)
-                self.bias_momentum_buffer = (self.moe_bias_momentum * self.bias_momentum_buffer + 
-                                            (1 - self.moe_bias_momentum) * gradient)
-                # Apply smoothed gradient
-                self.bias.data -= lr_bias * (self.bias_momentum_buffer) * bias_mult(iter_num, self.max_iter)
-            else:
-                self.bias.data -= lr_bias * (gradient) * bias_mult(iter_num, self.max_iter)
+            self.bias.data -= lr_bias * grad * bias_mult(iter_num, self.max_iter)
+            # if self.moe_bias_momentum_enabled:
+            #     # Update momentum buffer (EMA of gradients)
+            #     self.bias_momentum_buffer = (self.moe_bias_momentum * self.bias_momentum_buffer + 
+            #                                 (1 - self.moe_bias_momentum) * gradient)
+            #     # Apply smoothed gradient
+            #     self.bias.data -= lr_bias * (self.bias_momentum_buffer) * bias_mult(iter_num, self.max_iter)
+            # else:
+            #     self.bias.data -= lr_bias * (gradient) * bias_mult(iter_num, self.max_iter)
+
 
 class Block(nn.Module):
 
