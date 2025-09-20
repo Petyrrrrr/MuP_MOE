@@ -357,7 +357,7 @@ class GPTConfig:
     moe_bias_momentum_enabled: bool = True # Enable momentum for router bias updates (only used with bias method)
     moe_load_balance_method: str = "bias" # "bias" or "aux_loss" - method for load balancing
     moe_aux_loss_weight: float = 0.01 # Auxiliary loss coefficient (only used with aux_loss method)
-    alpha: float = 4.0 # Hidden layer size multiplier (hidden_size = alpha * n_embd)
+    alpha: float = 2.0 # Hidden layer size multiplier (hidden_size = alpha * n_embd)
     max_iters: int = 12000 # Maximum number of training iterations (used for bias decay)
     bias_update_interval: int = 100 # Update bias every n iterations
 class GPT(nn.Module):

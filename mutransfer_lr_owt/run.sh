@@ -5,29 +5,31 @@
 NUM_GPUS=8
 
 # DDP launcher using torchrun
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+
 LAUNCHER="torchrun --standalone --nproc_per_node=$NUM_GPUS"
 
 timestamp=$(python -c "from datetime import datetime; print(datetime.now().strftime('%Y%m%d_%H%M%S'))")
 
 # Configuration parameters matching run-multi-gpu.py
 max_iters=10000
-warmup_iters=2000
+warmup_iters=500
 router_lr_mult=0.25
 init_std=0.02
 moe_tau=0.02
 n_layer=14
-batch_size=20
-gradient_accumulation_steps=16
+batch_size=40
+gradient_accumulation_steps=8
 t_ema=10
-bias_update_interval=10
+bias_update_interval=1
 moe_bias_lr=1e-2
 
 # Test with one configuration - you can expand this loop
-for width in 1024
+for width in 512
 do
-    for num_exp in 8
+    for num_exp in 16
     do
-        for lr in 0.005
+        for lr in 0.01
         do
             for seed in 0
             do
@@ -89,10 +91,11 @@ do
                     --seed=$seed \
                     --backend='nccl' \
                     --device='cuda' \
+                    --alpha=4.0 \
                     --dtype='bfloat16' \
                     --compile=False \
                     --bias_update_interval=$bias_update_interval \
-                    >> /mnt/linky/outlog_${timestamp}
+                    >> /mnt/linky-b/outlog_owt_${timestamp}
             done
         done
     done
