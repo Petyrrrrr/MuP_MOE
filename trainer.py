@@ -357,12 +357,12 @@ class Trainer:
             iter_num += 1
             local_iter_num += 1
             
-            # termination conditions
+            # checkpoints
             if iter_num > self.max_iters or iter_num % 1000 == 1:
                 if self.ddp:
                     torch.distributed.barrier(device_ids=[self.ddp_settings['ddp_local_rank']])  # Sync before validation
 
-                # Perform validation sweep before ending training
+                # Perform validation sweep
                 if self.master_process:
                     print()
                     print("Performing validation sweep at iter_num " + str(iter_num))
@@ -392,7 +392,7 @@ class Trainer:
                                 self.csv_logger.close()  # Ensure final row is written
                         print(f"Validation - step {iter_num}: val loss {losses['val']:.4f}")
                         
-                        # Save router weights every 1000 iterations (including at max_iters)
+                        # Save router weights (including at max_iters)
                         if collect_moe and iter_num % 1000 == 1:
                             # Collect router weights from all layers
                             router_weights = []
