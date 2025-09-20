@@ -361,7 +361,8 @@ class Trainer:
             if iter_num > self.max_iters or iter_num % 1000 == 1:
                 if self.ddp:
                     torch.distributed.barrier(device_ids=[self.ddp_settings['ddp_local_rank']])  # Sync before validation
-
+                was_training = self.model.training
+                self.model.eval()
                 # Perform validation sweep
                 if self.master_process:
                     print()
@@ -437,6 +438,8 @@ class Trainer:
                                     for layer_usage in expert_usage_matrix:
                                         writer.writerow([f'{usage:.6f}' for usage in layer_usage])
                                 print(f"Expert usage matrix saved to {val_csv_path}")
+                if was_training:
+                    self.model.train()
                 if self.ddp:
                     torch.distributed.barrier(device_ids=[self.ddp_settings['ddp_local_rank']])  # Sync after validation
             if iter_num > self.max_iters:
