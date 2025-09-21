@@ -3,8 +3,11 @@ import math
 import torch
 import numpy as np
 
-def bias_mult(iter_num, max_iters):
-    return 1.0 - 0.5 * (iter_num / max_iters)
+def bias_mult(it, max_iters):
+    if it < max_iters * 0.5:
+        return 1.0
+    else:
+        return np.exp(-(it - max_iters * 0.5) / (max_iters * 0.5))
 
 def router_mult(iter_num, max_iters):
     return 1.0
