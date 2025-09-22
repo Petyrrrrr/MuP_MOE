@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-"""
-Fast resume script that re-downloads the same 25% of C4 data and immediately tokenizes.
-Since we know the exact parameters from your last run, we can reproduce it exactly.
-"""
 
 import os
 import sys
@@ -11,9 +7,9 @@ import signal
 from pathlib import Path
 
 # Set cache directories
-os.environ['HF_HOME'] = '/mnt/local/huggingface_cache'
-os.environ['HUGGINGFACE_HUB_CACHE'] = '/mnt/local/huggingface_cache/hub'
-os.environ['HF_DATASETS_CACHE'] = '/mnt/local/huggingface_cache/datasets'
+os.environ['HF_HOME'] = '/mnt/b-large/huggingface_cache'
+os.environ['HUGGINGFACE_HUB_CACHE'] = '/mnt/b-large/huggingface_cache/hub'
+os.environ['HF_DATASETS_CACHE'] = '/mnt/b-large/huggingface_cache/datasets'
 os.environ['HF_DATASETS_TRUST_REMOTE_CODE'] = '1'
 os.environ['HF_HUB_ENABLE_HF_TRANSFER'] = '1'
 
@@ -23,10 +19,9 @@ import tiktoken
 from datasets import load_dataset, Dataset
 
 # Configuration matching your last run
-DATASET_FRACTION = 0.25  # 25% of C4
-MAX_TOKENS_BILLIONS = 15.0
+MAX_TOKENS_BILLIONS = 20.0
 NUM_PROC = 8
-CHECKPOINT_DIR = Path('/mnt/local/c4_checkpoint')
+CHECKPOINT_DIR = Path('/mnt/b-large/c4_checkpoint')
 CHECKPOINT_DIR.mkdir(exist_ok=True)
 
 # Files for checkpoints
@@ -116,8 +111,7 @@ def main():
         save_progress(current_stage)
     else:
         # Need to continue downloading
-        print(f"\n📥 Downloading C4 dataset (25% subset)...")
-        print("This matches your previous download: 91.25M train, 91.25k validation examples")
+        print(f"\n📥 Downloading C4 dataset...")
 
         dataset_stream = load_dataset("c4", "en", streaming=True)
 
@@ -131,16 +125,34 @@ def main():
             current_stage = "downloading_train"
             save_progress(current_stage)
 
-            # Skip already downloaded examples
+            # More efficient approach: iterate and skip manually
+            skip_count = len(train_data)
+            examples_to_download = remaining_train
+
+            print(f"Skipping {skip_count:,} examples...")
             with tqdm(total=remaining_train, desc="Train data", unit="ex") as pbar:
-                for example in dataset_stream['train'].skip(len(train_data)).take(remaining_train):
+                examples_skipped = 0
+
+                for example in dataset_stream['train']:
+                    # Skip examples we already have
+                    if examples_skipped < skip_count:
+                        examples_skipped += 1
+                        if examples_skipped % 1000000 == 0:
+                            print(f"\rSkipped {examples_skipped:,}/{skip_count:,} examples...", end="")
+                        continue
+
+                    # Download new examples
                     train_data.append(example)
                     pbar.update(1)
 
-                    # Save checkpoint every 10k examples (for testing)
-                    if len(train_data) % 1000000 == 0:
+                    if len(train_data) % 20000000 == 0:
                         print(f"\n📊 Checkpoint at {len(train_data):,} examples")
                         save_data_checkpoint()
+
+
+                    # Stop when we have enough
+                    if len(train_data) >= train_limit:
+                        break
 
         # Download validation data if needed
         if len(val_data) < val_limit:
@@ -152,10 +164,22 @@ def main():
             current_stage = "downloading_validation"
             save_progress(current_stage)
 
-            # Skip already downloaded validation examples
-            val_data.extend(list(tqdm(dataset_stream['validation'].skip(len(val_data)).take(remaining_val),
-                               total=remaining_val,
-                               desc="Validation data", unit="ex")))
+            # More efficient approach for validation too
+            skip_count_val = len(val_data)
+            print(f"Skipping {skip_count_val:,} validation examples...")
+
+            examples_skipped_val = 0
+            with tqdm(total=remaining_val, desc="Validation data", unit="ex") as pbar:
+                for example in dataset_stream['validation']:
+                    if examples_skipped_val < skip_count_val:
+                        examples_skipped_val += 1
+                        continue
+
+                    val_data.append(example)
+                    pbar.update(1)
+
+                    if len(val_data) >= val_limit:
+                        break
 
         # Save final checkpoint
         save_data_checkpoint()

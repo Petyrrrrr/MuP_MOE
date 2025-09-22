@@ -5,7 +5,7 @@
 NUM_GPUS=4
 
 # DDP launcher using torchrun
-export CUDA_VISIBLE_DEVICES=0,1,2,3
+export CUDA_VISIBLE_DEVICES=4,5,6,7
 
 LAUNCHER="torchrun --standalone --nproc_per_node=$NUM_GPUS"
 
@@ -20,9 +20,9 @@ moe_tau=0.02
 n_layer=14
 batch_size=28
 gradient_accumulation_steps=12
-t_ema=10
+t_ema=20
 bias_update_interval=5
-moe_bias_lr=1e-2
+moe_bias_lr=5e-3
 
 # Test with one configuration - you can expand this loop
 for width in 1024
@@ -95,7 +95,7 @@ do
                     --dtype='bfloat16' \
                     --compile=False \
                     --bias_update_interval=$bias_update_interval \
-                    >> /mnt/linky-b/outlog_owt_${timestamp}_norouter_big
+                    >> /mnt/linky-b/outlog_owt_${timestamp}_LB_big_heavydecay
             done
         done
     done
