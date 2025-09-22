@@ -2,10 +2,10 @@
 # muP hyperparameter transfer with MOE - Multi-GPU DDP version
 
 # Number of GPUs to use for DDP training
-NUM_GPUS=8
+NUM_GPUS=4
 
 # DDP launcher using torchrun
-export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+export CUDA_VISIBLE_DEVICES=0,1,2,3
 
 LAUNCHER="torchrun --standalone --nproc_per_node=$NUM_GPUS"
 
@@ -13,19 +13,19 @@ timestamp=$(python -c "from datetime import datetime; print(datetime.now().strft
 
 # Configuration parameters matching run-multi-gpu.py
 max_iters=24000
-warmup_iters=500
+warmup_iters=1000
 router_lr_mult=0.5
 init_std=0.02
 moe_tau=0.02
 n_layer=14
-batch_size=14
-gradient_accumulation_steps=24
+batch_size=28
+gradient_accumulation_steps=12
 t_ema=10
 bias_update_interval=5
 moe_bias_lr=1e-2
 
 # Test with one configuration - you can expand this loop
-for width in 1536
+for width in 1024
 do
     for num_exp in 12
     do
@@ -95,7 +95,7 @@ do
                     --dtype='bfloat16' \
                     --compile=False \
                     --bias_update_interval=$bias_update_interval \
-                    >> /mnt/linky-b/outlog_owt_${timestamp}
+                    >> /mnt/linky-b/outlog_owt_${timestamp}_norouter_big
             done
         done
     done
