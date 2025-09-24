@@ -97,23 +97,25 @@ class MultiGPURunner:
     def generate_configurations(self) -> List[Dict]:
         """Generate all configurations to run."""
         configs = []
-        wid_exp = [(256, 32),
-                   (512, 16),
-                   (1024, 8),
-                   (2048, 4)]
-        lrs = [0.0025, 0.005, 0.01, 0.02, 0.04]
+        wid_exp = [(256, 4),
+                   (256, 8),
+                   (256, 16),
+                   (512, 4),
+                   (512, 8)
+                   (512, 12),
+                   (1024, 4)]
+        lrs = [0.002, 0.004, 0.005657, 0.008, 0.01131, 0.016, 0.0227, 0.032]
         seeds = [0]
-        max_iters = 10000  # Configuration parameter for max iterations
-        warmup_iters = 2000  # Configuration parameter for warmup iterations
-        router_lr_mult = 0.25
         init_std = 0.02
         moe_tau = 0.02
         n_layer = 14
-        batch_size = 32
-        gradient_accumulation_steps = 10
+        batch_size = 40
+        gradient_accumulation_steps = 8
         t_ema = 10
         bias_update_interval = 10
         for width, num_exp in wid_exp:
+                max_iters = (1 + ((4 * width * width * n_layer * (num_exp + 1)) // 1000) ) / 16
+                warmup_iters = max_iters // 20
                 for lr in lrs:
                     for seed in seeds:
                         weight_decay = t_ema / (max_iters * lr)
@@ -131,8 +133,8 @@ class MultiGPURunner:
                             'n_layer': n_layer,
                             'max_iters': max_iters,
                             'warmup_iters': warmup_iters,  
-                            'router_lr_mult': router_lr_mult,  
-                            'moe_bias_lr' : 1e-2,
+                            'router_lr_mult': 0.0,  
+                            'moe_bias_lr' : 0.0,
                             'moe_tau' : moe_tau,
                             'init_std' : init_std,
                             'gradient_accumulation' : gradient_accumulation_steps,
@@ -197,6 +199,7 @@ class MultiGPURunner:
             f"--seed={config['seed']}",
             "--backend=nccl",
             "--device=cuda",
+            "--alpha=2.0",
             "--dtype=bfloat16",
             "--compile=False",
             f"--bias_update_interval={config['bias_update_interval']}"
