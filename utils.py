@@ -109,10 +109,4 @@ def get_lr(it, learning_rate, warmup_iters, lr_decay_iters, max_iters, min_lr, d
     if it <= warmup_iters:
         return learning_rate * it / warmup_iters
     else:
-        return learning_rate * (it - warmup_iters) / (max_iters - warmup_iters)
-
-    # if it > lr_decay_iters:
-    #     return min_lr
-    # decay_ratio = (it - warmup_iters) / (lr_decay_iters - warmup_iters)
-    # coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
-    # return min_lr + coeff * (learning_rate - min_lr)
+        return learning_rate * 0.5 * (1.0 + math.cos(math.pi * (it - warmup_iters) / (max_iters - warmup_iters)))

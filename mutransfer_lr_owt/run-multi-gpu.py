@@ -98,12 +98,12 @@ class MultiGPURunner:
         """Generate all configurations to run."""
         configs = []
         wid_exp = [(256, 4, 32), (256, 8, 48), (512, 4, 100), (512, 8, 160), (256, 16, 76), (512, 12, 220), (1024, 4, 350),]
-        lrs = [0.002, 0.004, 0.005657, 0.008, 0.01131, 0.016, 0.0227, 0.032]
+        lrs = [0.002, 0.004, 0.005657, 0.008, 0.01131, 0.016, 0.0227, 0.032, 0.04525, 0.064]
         seeds = [0]
         init_std = 0.02
         moe_tau = 0.02
         n_layer = 14
-        batch_size = 40
+        batch_size = 48
         gradient_accumulation_steps = 8
         t_ema = 10
         bias_update_interval = 10
