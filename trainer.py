@@ -392,7 +392,9 @@ class Trainer:
                                 self.csv_logger.step()
                                 self.csv_logger.close()  # Ensure final row is written
                         print(f"Validation - step {iter_num}: val loss {losses['val']:.4f}")
-                        
+                        val_write_path = os.path.join(self.out_dir, f'val_loss_iter_{iter_num}.txt')
+                        with open(val_write_path, 'w') as f:
+                            f.write(f"Validation - step {iter_num}: val loss {losses['val']:.4f}")
                         # Save router weights (including at max_iters)
                         if collect_moe and iter_num % 1000 == 1:
                             # Collect router weights from all layers
