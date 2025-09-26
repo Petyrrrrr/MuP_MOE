@@ -97,25 +97,19 @@ class MultiGPURunner:
     def generate_configurations(self) -> List[Dict]:
         """Generate all configurations to run."""
         configs = []
-        wid_exp = [
-            (256, 16),
-            (1024, 4),
-            (256, 8),
-            (512, 4),
-            ]
-        lrs = [0.00037, 0.001111, 0.003333, 0.01, 0.03]
+        wid_exp = [(384, 4, 32), (384, 8, 48), (512, 4, 100), (512, 8, 160), (512, 12, 220), (1024, 4, 350), (384, 16, 76)]
+        lrs = [0.001, 0.002, 0.0039, 0.00565, 0.00781, 0.011, 0.0156, 0.0221, 0.0312]
         seeds = [0]
-        max_iters = 10000  # Configuration parameter for max iterations
-        warmup_iters = 500  # Configuration parameter for warmup iterations
-        router_lr_mult = 1.0
         init_std = 0.02
         moe_tau = 0.02
         n_layer = 14
-        batch_size = 40
-        gradient_accumulation_steps = 8
+        batch_size = 50
+        gradient_accumulation_steps = 12
         t_ema = 10
-        bias_update_interval = 5
-        for width, num_exp in wid_exp:
+        bias_update_interval = 10
+        for width, num_exp, _ in wid_exp:
+                max_iters = 10000
+                warmup_iters = max_iters // 20
                 for lr in lrs:
                     for seed in seeds:
                         weight_decay = t_ema / (max_iters * lr)
@@ -133,8 +127,8 @@ class MultiGPURunner:
                             'n_layer': n_layer,
                             'max_iters': max_iters,
                             'warmup_iters': warmup_iters,  
-                            'router_lr_mult': router_lr_mult,  
-                            'moe_bias_lr' : 1e-2,
+                            'router_lr_mult': 0.0,  
+                            'moe_bias_lr' : 0.0,
                             'moe_tau' : moe_tau,
                             'init_std' : init_std,
                             'gradient_accumulation' : gradient_accumulation_steps,
@@ -199,6 +193,7 @@ class MultiGPURunner:
             f"--seed={config['seed']}",
             "--backend=nccl",
             "--device=cuda",
+            "--alpha=2.0",
             "--dtype=bfloat16",
             "--compile=False",
             f"--bias_update_interval={config['bias_update_interval']}"
