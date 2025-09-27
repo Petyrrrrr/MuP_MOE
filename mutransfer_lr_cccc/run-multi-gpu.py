@@ -16,6 +16,9 @@ from dataclasses import dataclass, asdict
 import threading
 import queue
 
+# Enable PyTorch CUDA expandable segments for better memory management with MoE models
+os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
+
 @dataclass
 class Job:
     """Represents a single training job."""
@@ -97,14 +100,14 @@ class MultiGPURunner:
     def generate_configurations(self) -> List[Dict]:
         """Generate all configurations to run."""
         configs = []
-        wid_exp = [(384, 4, 32), (384, 8, 48), (512, 4, 100), (512, 8, 160), (512, 12, 220), (1024, 4, 350), (384, 16, 76)]
-        lrs = [0.001, 0.002, 0.0039, 0.00565, 0.00781, 0.011, 0.0156, 0.0221, 0.0312]
+        wid_exp = [(768, 4, 350), (512, 4, 100), (384, 8, 48),  (512, 8, 160), (512, 12, 220), (384, 4, 32),   ]
+        lrs = [0.001, 0.002, 0.004, 0.008, 0.016, 0.032, 0.064, 0.128]
         seeds = [0]
         init_std = 0.02
         moe_tau = 0.02
         n_layer = 14
-        batch_size = 50
-        gradient_accumulation_steps = 12
+        batch_size = 60
+        gradient_accumulation_steps = 9
         t_ema = 10
         bias_update_interval = 10
         for width, num_exp, _ in wid_exp:
@@ -149,7 +152,7 @@ class MultiGPURunner:
             f"--out_dir={out_dir}",
             "--eval_interval=1",
             "--log_interval=1",
-            "--eval_iters=200",
+            "--eval_iters=500",
             "--eval_only=False",
             "--skip_val_loss=True",
             "--always_save_checkpoint=False",
