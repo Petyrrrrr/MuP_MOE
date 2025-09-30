@@ -5,7 +5,7 @@
 NUM_GPUS=8
 
 # DDP launcher using torchrun
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 
 LAUNCHER="torchrun --standalone --nproc_per_node=$NUM_GPUS"
 
