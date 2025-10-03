@@ -71,7 +71,10 @@ class Trainer:
         
         # Get raw model (unwrap DDP if needed)
         self.raw_model = model.module if self.ddp else model
-        
+
+        # Cache map from parameter id to name for debugging/logging
+        self.parameter_name_map = self._build_parameter_name_map()
+
         # Initialize scaler for mixed precision
         self.scaler = torch.amp.GradScaler('cuda', enabled=(self.dtype == 'float16'))
         
@@ -140,11 +143,167 @@ class Trainer:
             return coord_check_dict, coord_check_handles
         else:
             return None, None
-    
+
+    def _build_parameter_name_map(self):
+        """Create a mapping from parameter id to its human-readable name."""
+        name_map = {}
+        if hasattr(self.raw_model, 'named_parameters'):
+            for name, param in self.raw_model.named_parameters():
+                name_map[id(param)] = name
+        if self.model is not self.raw_model and hasattr(self.model, 'named_parameters'):
+            for name, param in self.model.named_parameters():
+                name_map.setdefault(id(param), name)
+        return name_map
+
+    @staticmethod
+    def _format_norm(value):
+        if value is None:
+            return 'n/a'
+        if math.isnan(value):
+            return 'nan'
+        if math.isinf(value):
+            return 'inf'
+        abs_val = abs(value)
+        if abs_val >= 1e4 or (abs_val > 0 and abs_val < 1e-2):
+            return f"{value:.2e}"
+        return f"{value:.4f}"
+
+    @staticmethod
+    def _safe_sqrt(value):
+        if math.isnan(value):
+            return float('nan')
+        if value < 0:
+            return float('nan')
+        if math.isinf(value):
+            return float('inf')
+        return math.sqrt(value)
+
+    def _describe_param_group(self, index, group):
+        parts = [f"group[{index}]"]
+        name = group.get('name')
+        if name:
+            parts.append(str(name))
+        if group.get('is_router'):
+            layer_idx = group.get('layer_idx', '?')
+            parts.append(f"router_layer={layer_idx}")
+        lr_scale = group.get('lr_scale')
+        if lr_scale is not None and lr_scale != 1:
+            parts.append(f"lr_scale={lr_scale}")
+        weight_decay = group.get('weight_decay')
+        if weight_decay is not None:
+            parts.append(f"wd={weight_decay}")
+        return ' | '.join(parts)
+
+    def _collect_grad_norm_debug_info(self, top_groups=10, top_params=3, rescale_factor=1.0):
+        self.parameter_name_map = self._build_parameter_name_map()
+        name_map = self.parameter_name_map
+        group_infos = []
+        total_norm_sq = 0.0
+
+        for idx, group in enumerate(self.optimizer.param_groups):
+            group_norm_sq = 0.0
+            param_contribs = []
+            for param in group.get('params', []):
+                grad = getattr(param, 'grad', None)
+                if grad is None:
+                    continue
+                if grad.is_sparse:
+                    grad_values = grad.coalesce().values().float()
+                else:
+                    grad_values = grad.detach().float()
+                param_norm_tensor = torch.norm(grad_values, p=2)
+                raw_norm = param_norm_tensor.item()
+                is_finite = math.isfinite(raw_norm)
+                if is_finite:
+                    param_norm = raw_norm * rescale_factor
+                    param_norm_sq = param_norm * param_norm
+                else:
+                    param_norm = raw_norm
+                    param_norm_sq = float('nan') if math.isnan(raw_norm) else float('inf')
+                group_norm_sq += param_norm_sq
+                total_norm_sq += param_norm_sq
+                name = name_map.get(id(param), f'<unnamed_param_{idx}>')
+                param_contribs.append({
+                    'name': name,
+                    'shape': tuple(param.shape),
+                    'norm': param_norm,
+                    'norm_sq': param_norm_sq,
+                    'numel': param.numel(),
+                    'is_finite': is_finite
+                })
+
+            if not param_contribs:
+                continue
+
+            param_contribs.sort(
+                key=lambda entry: float('inf') if not entry['is_finite'] else entry['norm'],
+                reverse=True
+            )
+            group_info = {
+                'index': idx,
+                'label': self._describe_param_group(idx, group),
+                'norm_sq': group_norm_sq,
+                'norm': self._safe_sqrt(group_norm_sq),
+                'num_params': len(param_contribs),
+                'top_params': param_contribs[:top_params],
+                'has_non_finite': any(not entry['is_finite'] for entry in param_contribs)
+            }
+            group_infos.append(group_info)
+
+        if not group_infos:
+            return None
+
+        group_infos.sort(
+            key=lambda info: float('inf') if not math.isfinite(info['norm']) else info['norm'],
+            reverse=True
+        )
+        return {
+            'groups': group_infos[:top_groups],
+            'total_norm_sq': total_norm_sq,
+            'total_norm': self._safe_sqrt(total_norm_sq)
+        }
+
+    def _log_grad_norm_debug_info(self, debug_info, total_norm_value):
+        if not debug_info or not debug_info.get('groups'):
+            print('No gradient debug information available.')
+            return
+
+        total_norm = total_norm_value
+        total_norm_preclip = debug_info.get('total_norm')
+        total_norm_sq = debug_info.get('total_norm_sq')
+        print('  Top parameter groups by gradient norm before clipping:')
+        for rank, group in enumerate(debug_info['groups'], start=1):
+            group_norm = group['norm']
+            norm_display = self._format_norm(group_norm)
+            percent_str = ''
+            denominator_sq = None
+            if total_norm_sq is not None and math.isfinite(total_norm_sq) and total_norm_sq > 0:
+                denominator_sq = total_norm_sq
+            elif math.isfinite(total_norm) and total_norm > 0:
+                denominator_sq = total_norm * total_norm
+            elif math.isfinite(total_norm_preclip) and total_norm_preclip > 0:
+                denominator_sq = total_norm_preclip * total_norm_preclip
+            if denominator_sq is not None and math.isfinite(group['norm_sq']):
+                percent = (group['norm_sq'] / denominator_sq) * 100
+                percent_str = f" ({percent:.1f}% of total norm^2)"
+            print(f"    {rank}. {group['label']}: norm={norm_display}{percent_str} (params={group['num_params']})")
+            for param_info in group['top_params']:
+                param_norm = param_info['norm']
+                param_display = self._format_norm(param_norm)
+                note = ''
+                if not param_info['is_finite']:
+                    note = ' [non-finite]'
+                shape_str = 'x'.join(str(dim) for dim in param_info['shape'])
+                param_percent_str = ''
+                if denominator_sq is not None and math.isfinite(param_info['norm_sq']):
+                    param_percent = (param_info['norm_sq'] / denominator_sq) * 100
+                    param_percent_str = f" ({param_percent:.2f}% of total norm^2)"
+                print(f"        - {param_info['name']} shape={shape_str} norm={param_display}{param_percent_str}{note}")
+
     def training_step(self, iter_num, scaler, ctx, gradient_accumulation_steps, grad_clip, get_batch_fn):
         """
         Execute forward/backward pass with gradient accumulation.
-        
+
         Returns:
             Tuple of (loss, coord_check_dict, grad_norm) for logging
         """
@@ -175,17 +334,31 @@ class Trainer:
         # clip the gradient
         if grad_clip != 0.0:
             scaler.unscale_(self.optimizer)
-            total_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), grad_clip)
-            grad_norm = total_norm.item()
-            
+            total_norm_tensor = torch.nn.utils.clip_grad_norm_(self.model.parameters(), grad_clip)
+            grad_norm = total_norm_tensor.item()
+
             # Only print warnings when gradient norm is problematic
             if self.master_process:
-                if torch.isnan(total_norm):
+                trigger_debug = False
+                if torch.isnan(total_norm_tensor):
                     print("WARNING: Gradient norm is NaN!")
-                elif total_norm > grad_clip * 2:
-                    print(f"WARNING: Large gradient norm {total_norm:.2f} (clip={grad_clip})")
-                if total_norm > 1e5:
-                    raise Exception(f"Gradient norm {total_norm:.2f} is too large, exceeding 1e5")
+                    trigger_debug = True
+                elif grad_norm > grad_clip * 10:
+                    print(f"WARNING: Large gradient norm {grad_norm:.2f} (clip={grad_clip})")
+                    trigger_debug = True
+                #if grad_norm > 1e5:
+                #    raise Exception(f"Gradient norm {grad_norm:.2f} is too large, exceeding 1e5")
+
+                if trigger_debug:
+                    rescale_factor = 1.0
+                    if math.isfinite(grad_norm) and grad_norm > 0:
+                        clip_coef = grad_clip / (grad_norm + 1e-6)
+                        clip_scale = min(1.0, clip_coef)
+                        if clip_scale > 0:
+                            rescale_factor = 1.0 / clip_scale if clip_scale < 1.0 else 1.0
+                    debug_info = self._collect_grad_norm_debug_info(rescale_factor=rescale_factor)
+                    if debug_info:
+                        self._log_grad_norm_debug_info(debug_info, grad_norm)
         # step the optimizer and scaler if training in fp16
         scaler.step(self.optimizer)
         scaler.update()
