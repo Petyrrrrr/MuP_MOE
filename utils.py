@@ -7,7 +7,7 @@ def bias_mult(it, max_iters):
     if it < max_iters * 0.1:
         return 1.0
     else:
-        return (it - max_iters * 0.1) / (0.9 *  max_iters)
+        return 0.5 * (1.0 + math.cos(math.pi * (it - max_iters * 0.1) / (0.9 *  max_iters)))
 
 def router_mult(iter_num, max_iters):
     return 1.0

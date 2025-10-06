@@ -2,32 +2,30 @@
 # muP hyperparameter transfer with MOE - Multi-GPU DDP version
 
 # Number of GPUs to use for DDP training
-NUM_GPUS=8
+NUM_GPUS=4
 
 # DDP launcher using torchrun
-export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+export CUDA_VISIBLE_DEVICES=0,1,2,3
 
 LAUNCHER="torchrun --standalone --nproc_per_node=$NUM_GPUS"
 
 timestamp=$(python -c "from datetime import datetime; print(datetime.now().strftime('%Y%m%d_%H%M%S'))")
-
 # Configuration parameters matching run-multi-gpu.py
-max_iters=10000
-warmup_iters=500
+max_iters=3000
+warmup_iters=300
 router_lr_mult=0.25
 init_std=0.02
 moe_tau=0.02
 n_layer=14
-batch_size=40
+batch_size=60
 gradient_accumulation_steps=8
-t_ema=10
-bias_update_interval=1
-moe_bias_lr=1.6e-2
-
+t_ema_inv=0.0
+bias_update_interval=5
+moe_bias_lr_mult=1.0
 # Test with one configuration - you can expand this loop
-for width in 256
+for width in 512
 do
-    for num_exp in 16
+    for num_exp in 12
     do
         for lr in 0.01
         do
@@ -39,8 +37,8 @@ do
                 mup_base_width=256
                 mup_width_multiplier=$(echo "scale=8; $width/$mup_base_width" | bc -l)
                 num_act=$((num_exp/4))
-                weight_decay=$(echo "scale=8; $t_ema/($max_iters*$lr)" | bc -l)
-
+                weight_decay=0.0
+                moe_bias_lr=$(echo "$moe_bias_lr_mult * $lr" | bc -l)
                 out_dir="run_data/mutransfer_lr_cccc/out_${timestamp}/width${width}_depth${n_layer}_experts${num_exp}_active${num_act}_seed${seed}_lr${lr}"
 
                 $LAUNCHER train.py \
@@ -89,12 +87,13 @@ do
                     --moe_load_balance_method='bias' \
                     --moe_aux_loss_weight=1.0 \
                     --seed=$seed \
+                    --alpha=1.0 \
                     --backend='nccl' \
                     --device='cuda' \
                     --dtype='bfloat16' \
                     --compile=False \
                     --bias_update_interval=$bias_update_interval \
-                    >> /mnt/linky/outlog_cccc_${timestamp}
+                    >> /home/ubuntu/MuP_MOE/std_out/debugged_outlog_cccc_${timestamp}
             done
         done
     done

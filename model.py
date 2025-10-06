@@ -186,7 +186,7 @@ class MLP_MOE(nn.Module):
         self.bias = nn.Parameter(torch.zeros(self.n_exp))
         self.dtype = torch.bfloat16
         # Experts
-        self.experts = nn.ModuleList([Expert(config) for _ in range(self.n_exp)])
+        self.experts = nn.ModuleList([MLP(config) for _ in range(self.n_exp)])
         
         # For tracking tokens per expert (needed for learning rate calculation)
         self.register_buffer('tokens_per_expert', torch.zeros(self.n_exp))

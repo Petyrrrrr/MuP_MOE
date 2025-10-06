@@ -100,52 +100,54 @@ class MultiGPURunner:
     def generate_configurations(self) -> List[Dict]:
         """Generate all configurations to run."""
         configs = []
-        wid_exp = [(768, 4, 350), (512, 4, 100), (384, 8, 48),  (512, 8, 160), (512, 12, 220), (384, 4, 32),   ]
-        lrs = [0.001, 0.002, 0.004, 0.008, 0.016, 0.032, 0.064, 0.128]
-        seeds = [0]
+        wid_exp = [(512, 4, 220), (768, 4, 0), (1024, 4, 0), (512, 8, 350), (768, 8, 0), (512, 16, 0), (768, 16, 650)]
+        lrs = [0.002, 0.004, 0.008, 0.016, 0.032, 0.064, 0.128, 0.256]
+        seeds = [1]
         init_std = 0.02
         moe_tau = 0.02
         n_layer = 14
-        batch_size = 60
-        gradient_accumulation_steps = 9
-        t_ema = 10
+        batch_size = 40
+        gradient_accumulation_steps = 15
+        t_ema_inv = 0.0
         bias_update_interval = 10
-        for width, num_exp, _ in wid_exp:
-                max_iters = 10000
-                warmup_iters = max_iters // 20
-                for lr in lrs:
-                    for seed in seeds:
-                        weight_decay = t_ema / (max_iters * lr)
-                        config = {
-                            'width': width,
-                            'num_exp': num_exp,
-                            'lr': lr,
-                            'seed': seed,
-                            'head_size': 64,
-                            'n_heads': width // 64,
-                            'min_lr': lr,
-                            'mup_base_width': 256,
-                            'mup_width_multiplier': width / 256,
-                            'num_act': num_exp // 4,
-                            'n_layer': n_layer,
-                            'max_iters': max_iters,
-                            'warmup_iters': warmup_iters,  
-                            'router_lr_mult': 0.0,  
-                            'moe_bias_lr' : 0.0,
-                            'moe_tau' : moe_tau,
-                            'init_std' : init_std,
-                            'gradient_accumulation' : gradient_accumulation_steps,
-                            'batch_size' : batch_size,
-                            'weight_decay' : weight_decay,
-                            'bias_update_interval' : bias_update_interval,
-                        }
-                        configs.append(config)
+        for it in range(1):
+            for width, num_exp, _ in wid_exp:
+                    max_iters = 3000
+                    warmup_iters = 300
+                    for lr in lrs:
+                        for seed in seeds:
+                            weight_decay = t_ema_inv / (max_iters * lr)
+                            config = {
+                                'width': width,
+                                'num_exp': num_exp,
+                                'lr': lr,
+                                'seed': seed,
+                                'head_size': 64,
+                                'n_heads': width // 64,
+                                'min_lr': lr,
+                                'mup_base_width': 256,
+                                'mup_width_multiplier': width / 256,
+                                'num_act': num_exp//4,
+                                'n_layer': n_layer,
+                                'max_iters': max_iters,
+                                'warmup_iters': warmup_iters,  
+                                'router_lr_mult': 0.0,  
+                                'moe_bias_lr' : 0.0,
+                                'moe_tau' : moe_tau,
+                                'init_std' : init_std,
+                                'gradient_accumulation' : gradient_accumulation_steps,
+                                'batch_size' : batch_size,
+                                'weight_decay' : weight_decay,
+                                'bias_update_interval' : bias_update_interval,
+                                'alpha' : 1.0,
+                            }
+                            configs.append(config)
         
         return configs
     
     def build_command(self, config: Dict) -> Tuple[List[str], str]:
         """Build the command list for a given configuration."""
-        out_dir = f"run_data/mutransfer_lr_cccc/out_{self.timestamp}/width{config['width']}_depth{config['n_layer']}_experts{config['num_exp']}_active{config['num_act']}_seed{config['seed']}_lr{config['lr']}"
+        out_dir = f"run_data/mutransfer_lr_cccc/out_{self.timestamp}/width{config['width']}_depth{config['n_layer']}_experts{config['num_exp']}_active{config['num_act']}_seed{config['seed']}_lr{config['lr']}_alpha{config['alpha']}"
         
         cmd_args = [
             "python3", "-u", "train.py",  # -u for unbuffered output
@@ -196,7 +198,7 @@ class MultiGPURunner:
             f"--seed={config['seed']}",
             "--backend=nccl",
             "--device=cuda",
-            "--alpha=2.0",
+            f"--alpha={config['alpha']}",
             "--dtype=bfloat16",
             "--compile=False",
             f"--bias_update_interval={config['bias_update_interval']}"
@@ -226,7 +228,7 @@ class MultiGPURunner:
             cmd_args, out_dir = self.build_command(job.config)
             
             # Create descriptive filename
-            job_desc = f"job_{job.job_id:04d}_gpu{gpu_id}_w{job.config['width']}_exp{job.config['num_exp']}_lr{job.config['lr']:.2e}_seed{job.config['seed']}"
+            job_desc = f"job_{job.job_id:04d}_gpu{gpu_id}_w{job.config['width']}_exp{job.config['num_exp']}_lr{job.config['lr']:.2e}_seed{job.config['seed']}_alpha{job.config['alpha']}"
             
             # File paths
             log_file = self.log_dir / "stdout" / f"{job_desc}.log"
