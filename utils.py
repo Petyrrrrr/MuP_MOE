@@ -13,7 +13,7 @@ def router_mult(iter_num, max_iters):
     return 1.0
 
 def bias_update(usage, target):
-    return (usage - target) * ( 0.1 + 0.9 * ( torch.abs(usage - target) > 0.5 * target) )
+    return (usage - target)
 
 def get_batch(split, data_dir, block_size, batch_size, device_type, device):
     if split == 'train':

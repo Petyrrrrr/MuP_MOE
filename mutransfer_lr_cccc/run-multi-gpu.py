@@ -100,19 +100,19 @@ class MultiGPURunner:
     def generate_configurations(self) -> List[Dict]:
         """Generate all configurations to run."""
         configs = []
-        wid_exp = [(512, 4, 220), (768, 4, 0), (1024, 4, 0), (512, 8, 350), (768, 8, 0), (512, 16, 0), (768, 16, 650)]
-        lrs = [0.002, 0.004, 0.008, 0.016, 0.032, 0.064, 0.128, 0.256]
+        wid_exp = [(768, 16, 220)]
+        lrs = [0.0005, 0.001, 0.002, 0.004, 0.008, 0.016, 0.032, 0.064, ]
         seeds = [1]
         init_std = 0.02
         moe_tau = 0.02
         n_layer = 14
         batch_size = 40
-        gradient_accumulation_steps = 15
+        gradient_accumulation_steps = 12
         t_ema_inv = 0.0
-        bias_update_interval = 10
+        bias_update_interval = 1
         for it in range(1):
             for width, num_exp, _ in wid_exp:
-                    max_iters = 3000
+                    max_iters = 5000
                     warmup_iters = 300
                     for lr in lrs:
                         for seed in seeds:
@@ -131,8 +131,8 @@ class MultiGPURunner:
                                 'n_layer': n_layer,
                                 'max_iters': max_iters,
                                 'warmup_iters': warmup_iters,  
-                                'router_lr_mult': 0.0,  
-                                'moe_bias_lr' : 0.0,
+                                'router_lr_mult': 0.5,  
+                                'moe_bias_lr' : 0.1,
                                 'moe_tau' : moe_tau,
                                 'init_std' : init_std,
                                 'gradient_accumulation' : gradient_accumulation_steps,
@@ -147,14 +147,14 @@ class MultiGPURunner:
     
     def build_command(self, config: Dict) -> Tuple[List[str], str]:
         """Build the command list for a given configuration."""
-        out_dir = f"run_data/mutransfer_lr_cccc/out_{self.timestamp}/width{config['width']}_depth{config['n_layer']}_experts{config['num_exp']}_active{config['num_act']}_seed{config['seed']}_lr{config['lr']}_alpha{config['alpha']}"
+        out_dir = f"run_data/mutransfer_lr_cccc/out_{self.timestamp}/width{config['width']}_depth{config['n_layer']}_experts{config['num_exp']}_active{config['num_act']}_seed{config['seed']}_lr{config['lr']}_alpha{config['alpha']}_mult{config['router_lr_mult']}"
         
         cmd_args = [
             "python3", "-u", "train.py",  # -u for unbuffered output
             f"--out_dir={out_dir}",
             "--eval_interval=1",
             "--log_interval=1",
-            "--eval_iters=500",
+            "--eval_iters=1000",
             "--eval_only=False",
             "--skip_val_loss=True",
             "--always_save_checkpoint=False",
@@ -228,7 +228,7 @@ class MultiGPURunner:
             cmd_args, out_dir = self.build_command(job.config)
             
             # Create descriptive filename
-            job_desc = f"job_{job.job_id:04d}_gpu{gpu_id}_w{job.config['width']}_exp{job.config['num_exp']}_lr{job.config['lr']:.2e}_seed{job.config['seed']}_alpha{job.config['alpha']}"
+            job_desc = f"job_{job.job_id:04d}_gpu{gpu_id}_w{job.config['width']}_exp{job.config['num_exp']}_lr{job.config['lr']:.2e}_seed{job.config['seed']}_alpha{job.config['alpha']}_mult{job.config['router_lr_mult']}"
             
             # File paths
             log_file = self.log_dir / "stdout" / f"{job_desc}.log"

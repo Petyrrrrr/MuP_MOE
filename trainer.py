@@ -98,9 +98,10 @@ class Trainer:
                     if hasattr(block, 'use_moe') and block.use_moe:
                         mlp_moe = block.mlp
                         if mlp_moe.total_tokens > 0 and iter_num % self.bias_update_interval == self.bias_update_interval - 1:
-                            # Calculate average usage per expert
+                            # Calculate average usage per expert and max deviation from target
                             avg_usage = mlp_moe.tokens_per_expert / mlp_moe.total_tokens
                             target_usage = mlp_moe.num_act / mlp_moe.n_exp
+                            max_deviation = torch.max(torch.abs(avg_usage - target_usage)).item()
                             # Store detailed stats for each layer
                             momentum_values = mlp_moe.bias_momentum_buffer.tolist() if moe_bias_momentum_enabled else None
                             moe_layer_stats.append({
@@ -108,7 +109,8 @@ class Trainer:
                                 'usage': [f'{u:.3f}' for u in avg_usage.tolist()],
                                 'bias': [f'{b:.3f}' for b in mlp_moe.bias.tolist()],
                                 'momentum': [f'{m:.3f}' for m in momentum_values] if momentum_values else None,
-                                'target': target_usage
+                                'target': target_usage,
+                                'max_deviation': max_deviation
                             })
                             # Update bias only if using bias method
                             if moe_load_balance_method == "bias":
@@ -401,12 +403,14 @@ class Trainer:
         # Initialize tqdm progress bar (only on master process)
         pbar = None
         moe_pbars = []
+        self._moe_last_descriptions = None
         if self.master_process:
             pbar = tqdm(initial=iter_num, total=self.max_iters, desc="Training", 
                         unit="iter", dynamic_ncols=True, position=0)
             
             # Create separate progress bars for each MOE layer if MOE is enabled
             if self.num_exp > 1:
+                self._moe_last_descriptions = [None] * self.n_layer
                 for i in range(self.n_layer):
                     layer_pbar = tqdm(total=0, desc=f"L{i}: Initializing...", 
                                     unit="", leave=False, position=i+1, 
@@ -518,10 +522,19 @@ class Trainer:
                     for stats in moe_layer_stats:
                         layer_idx = stats['layer']
                         if layer_idx < len(moe_pbars):
-                            usage_str = ','.join(stats['usage'])
-                            bias_str = ','.join(stats['bias'])
-                            layer_desc = f"L{layer_idx}: usage[{usage_str}] bias[{bias_str}]"
-                            moe_pbars[layer_idx].set_description(layer_desc)
+                            max_dev_value = stats.get('max_deviation')
+                            try:
+                                max_dev_value = float(max_dev_value)
+                            except:
+                                max_dev_value = None
+                            layer_desc = (
+                                f"L{layer_idx}: max_dev {max_dev_value:.3f}" if isinstance(max_dev_value, float)
+                                else f"L{layer_idx}: max_dev n/a"
+                            )
+                            if self._moe_last_descriptions is None or self._moe_last_descriptions[layer_idx] != layer_desc:
+                                if self._moe_last_descriptions is not None:
+                                    self._moe_last_descriptions[layer_idx] = layer_desc
+                                moe_pbars[layer_idx].set_description(layer_desc)
             
             # Update progress bar
             if self.master_process:

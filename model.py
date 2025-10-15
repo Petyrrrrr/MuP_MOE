@@ -150,28 +150,6 @@ class MLP(nn.Module):
         x = self.dropout(x)
         return x
 
-class Expert(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-        self.config = config
-        hidden_size = int(config.alpha * config.n_embd)
-        self.c_fc = nn.Linear(config.n_embd, hidden_size, bias=config.bias)
-        self.gelu = nn.GELU()
-        self.c_proj = nn.Linear(hidden_size, config.n_embd, bias=config.bias)
-        self.dropout = nn.Dropout(config.dropout)
-        
-    def forward(self, x):
-        if self.config.mup_enabled:
-            # muP: scale activations in forward pass
-            h = self.gelu(self.c_fc(x) / math.sqrt(self.config.n_embd))
-            hidden_size = int(self.config.alpha * self.config.n_embd)
-            out = self.c_proj(h) / hidden_size
-        else:
-            h = self.gelu(self.c_fc(x))
-            out = self.c_proj(h)
-        out = self.dropout(out)
-        return out
-
 class MLP_MOE(nn.Module):
     def __init__(self, config):
         super().__init__()
