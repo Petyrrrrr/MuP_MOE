@@ -1,36 +1,58 @@
 #!/usr/bin/env python3
 """Download C4 train split with resume support and stop at 85M examples."""
 
+import argparse
 import os
 import sys
 import pickle
 import signal
 from pathlib import Path
 
-big_dir = "/mnt/b-large/"
-
-# Set cache directories so downloads land on the large disk
-os.environ['HF_HOME'] = big_dir + 'huggingface_cache'
-os.environ['HUGGINGFACE_HUB_CACHE'] = big_dir + 'huggingface_cache/hub'
-os.environ['HF_DATASETS_CACHE'] = big_dir + 'huggingface_cache/datasets'
-os.environ['HF_DATASETS_TRUST_REMOTE_CODE'] = '1'
-os.environ['HF_HUB_ENABLE_HF_TRANSFER'] = '1'
-
 from tqdm import tqdm
 from datasets import load_dataset
 
-TRAIN_LIMIT = 85_000_000
-CHECKPOINT_INTERVAL = 20_000_000
+TRAIN_LIMIT = 2_000_000
+CHECKPOINT_INTERVAL = 1_000_000
 
-CHECKPOINT_DIR = Path(big_dir + 'c4_checkpoint')
-CHECKPOINT_DIR.mkdir(exist_ok=True)
+DEFAULT_BIG_DIR = Path('/mnt/local')
 
-TRAIN_CHECKPOINT = CHECKPOINT_DIR / 'train_data.pkl'
+# Global paths populated via configure_big_dir(); defaults allow module import.
+big_dir = DEFAULT_BIG_DIR
+CHECKPOINT_DIR = big_dir / 'c4_checkpoint'
+TRAIN_CHECKPOINT = CHECKPOINT_DIR / 'train.pkl'
 PROGRESS_FILE = CHECKPOINT_DIR / 'progress.txt'
 FINAL_OUTPUT = CHECKPOINT_DIR / 'train.pkl'
 
+# Mutable dataset cache so helpers can access the resolved directories.
 train_data = []
 current_stage = "starting"
+
+
+def configure_big_dir(base_dir: Path) -> None:
+    """Apply the big-dir override and ensure cache directories exist."""
+    global big_dir, CHECKPOINT_DIR, TRAIN_CHECKPOINT, PROGRESS_FILE, FINAL_OUTPUT
+
+    big_dir = base_dir
+    CHECKPOINT_DIR = big_dir / 'c4_checkpoint'
+    CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
+
+    TRAIN_CHECKPOINT = CHECKPOINT_DIR / 'train_data.pkl'
+    PROGRESS_FILE = CHECKPOINT_DIR / 'progress.txt'
+    FINAL_OUTPUT = CHECKPOINT_DIR / 'train.pkl'
+
+    hf_cache = big_dir / 'huggingface_cache'
+    (hf_cache).mkdir(parents=True, exist_ok=True)
+    (hf_cache / 'hub').mkdir(parents=True, exist_ok=True)
+    (hf_cache / 'datasets').mkdir(parents=True, exist_ok=True)
+
+    os.environ['HF_HOME'] = str(hf_cache)
+    os.environ['HUGGINGFACE_HUB_CACHE'] = str(hf_cache / 'hub')
+    os.environ['HF_DATASETS_CACHE'] = str(hf_cache / 'datasets')
+    os.environ['HF_DATASETS_TRUST_REMOTE_CODE'] = '1'
+    os.environ['HF_HUB_ENABLE_HF_TRANSFER'] = '1'
+
+
+configure_big_dir(DEFAULT_BIG_DIR)
 
 
 def save_progress(stage_name: str) -> None:
@@ -73,6 +95,17 @@ def write_final_pickle() -> None:
 
 def main() -> None:
     global train_data, current_stage
+
+    parser = argparse.ArgumentParser(description="Download the C4 train split to a large disk")
+    parser.add_argument(
+        "--big-dir",
+        default=str(DEFAULT_BIG_DIR),
+        help="Base directory for Hugging Face caches and checkpoints (default: /mnt/local)",
+    )
+    args = parser.parse_args()
+
+    resolved_big_dir = Path(args.big_dir).expanduser().resolve()
+    configure_big_dir(resolved_big_dir)
 
     print("=" * 80)
     print("C4 Dataset Download - Resume Friendly (Train Only)")

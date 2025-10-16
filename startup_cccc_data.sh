@@ -2,12 +2,13 @@
 
 set -euo pipefail
 
+BIG_DIR="/mnt/local"
 PROJ="/home/ubuntu/MuP_MOE"
 DATA_DIR="$PROJ/data/cccc"
 VENV="$PROJ/venv"
 DATA_DOWNLOAD="$DATA_DIR/data_download.py"
 TOKENIZER="$DATA_DIR/tokenize_pkl_to_bin.py"
-PICKLE_OUT="/mnt/b-large/c4_checkpoint/train.pkl"
+PICKLE_OUT="$BIG_DIR/c4_checkpoint/train.pkl"
 
 echo "==> Activating venv at $VENV"
 if [[ ! -d "$VENV" ]]; then
@@ -15,7 +16,7 @@ if [[ ! -d "$VENV" ]]; then
 fi
 source "$VENV/bin/activate"
 
-python "$DATA_DOWNLOAD"
+python "$DATA_DOWNLOAD" --big-dir "$BIG_DIR"
 
 if [[ ! -f "$PICKLE_OUT" ]]; then
   echo "[error] Expected pickle at $PICKLE_OUT" >&2
