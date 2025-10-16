@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+PROJ="/home/ubuntu/MuP_MOE"
+DATA_DIR="$PROJ/data/cccc"
+VENV="$PROJ/venv"
+DATA_DOWNLOAD="$DATA_DIR/data_download.py"
+TOKENIZER="$DATA_DIR/tokenize_pkl_to_bin.py"
+PICKLE_OUT="/mnt/b-large/c4_checkpoint/train.pkl"
+
+echo "==> Activating venv at $VENV"
+if [[ ! -d "$VENV" ]]; then
+  python3 -m venv "$VENV"
+fi
+source "$VENV/bin/activate"
+
+python "$DATA_DOWNLOAD"
+
+if [[ ! -f "$PICKLE_OUT" ]]; then
+  echo "[error] Expected pickle at $PICKLE_OUT" >&2
+  exit 1
+fi
+
+echo "==> Tokenizing $PICKLE_OUT"
+python "$TOKENIZER" --in "$PICKLE_OUT" --out "$DATA_DIR" --encoding gpt2 --add-eos
+
+echo "==> Done. Tokenized files are in $DATA_DIR"

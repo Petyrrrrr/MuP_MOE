@@ -3,7 +3,6 @@
 Script to inspect model architecture and print all parameter names and shapes.
 """
 
-import torch
 from model import GPT, GPTConfig
 
 def inspect_model_weights():
