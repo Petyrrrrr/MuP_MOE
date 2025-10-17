@@ -179,7 +179,7 @@ class MLP_MOE(nn.Module):
         return torch.sigmoid(x).to(x.dtype)
     
     def s_func(self, x):
-        return F.softmax(x, dim=-1).to(x.dtype)
+        return 0.5 + torch.atan(x).to(x.dtype) / math.pi
     
     def forward(self, x):
         B, T, C = x.shape
@@ -192,7 +192,8 @@ class MLP_MOE(nn.Module):
         _, topk_indices = mu_add_bias.topk(self.num_act, dim=-1)  # (B*T, num_act)
 
         selected = score.gather(-1, topk_indices).to(score.dtype)  # (B*T, num_act)
-        selected = selected / (selected.sum(-1, keepdim=True) + self.null_reg).to(score.dtype) #normalize experts
+        #selected = selected / (selected.sum(-1, keepdim=True) + self.null_reg).to(score.dtype) #normalize experts
+        selected = selected / float(self.num_act)
 
         score = torch.zeros_like(score).scatter(1, topk_indices, selected)
         mask  = torch.zeros_like(score).scatter(1, topk_indices, 1.0)

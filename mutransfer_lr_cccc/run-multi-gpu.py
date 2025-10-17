@@ -100,14 +100,14 @@ class MultiGPURunner:
     def generate_configurations(self) -> List[Dict]:
         """Generate all configurations to run."""
         configs = []
-        wid_exp = [(768, 48, 220)]
+        wid_exp = [(768, 12, 20), (768, 8, 20), (384, 8, 10), (1024, 8, 20), (384, 12, 10), (384, 32, 20), (384, 48, 220)]
         lrs = [0.0005, 0.001, 0.002, 0.004, 0.008, 0.016, 0.032, 0.064, ]
         seeds = [1]
         init_std = 0.02
         moe_tau = 0.02
         n_layer = 14
-        batch_size = 24
-        gradient_accumulation_steps = 20
+        batch_size = 48
+        gradient_accumulation_steps = 10
         t_ema_inv = 0.0
         bias_update_interval = 1
         for it in range(1):
@@ -127,7 +127,7 @@ class MultiGPURunner:
                                 'min_lr': lr,
                                 'mup_base_width': 256,
                                 'mup_width_multiplier': width / 256,
-                                'num_act': num_exp//3,
+                                'num_act': num_exp//4,
                                 'n_layer': n_layer,
                                 'max_iters': max_iters,
                                 'warmup_iters': warmup_iters,  
