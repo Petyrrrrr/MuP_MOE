@@ -100,7 +100,7 @@ class MultiGPURunner:
     def generate_configurations(self) -> List[Dict]:
         """Generate all configurations to run."""
         configs = []
-        wid_exp = [(768, 12, 20), (768, 8, 20), (384, 8, 10), (1024, 8, 20), (384, 12, 10), (384, 32, 20), (384, 48, 220)]
+        wid_exp = [(384, 32, 10)]
         lrs = [0.0005, 0.001, 0.002, 0.004, 0.008, 0.016, 0.032, 0.064, ]
         seeds = [1]
         init_std = 0.02
@@ -154,7 +154,7 @@ class MultiGPURunner:
             f"--out_dir={out_dir}",
             "--eval_interval=1",
             "--log_interval=1",
-            "--eval_iters=1000",
+            f"--eval_iters={100*config['gradient_accumulation']}",
             "--eval_only=False",
             "--skip_val_loss=True",
             "--always_save_checkpoint=False",

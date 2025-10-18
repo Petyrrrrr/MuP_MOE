@@ -30,7 +30,7 @@ class Trainer:
             config: Configuration dictionary with all training parameters
             device: The device to train on
             master_process: Whether this is the master process (for logging)
-            ddp_settings: Optional DDP settings dict with 'ddp', 'ddp_local_rank', 'ddp_world_size'
+            ddp_settings: Optional DDP settings dict with 'ddp', 'ddp_rank', 'ddp_local_rank', 'ddp_world_size'
         """
         self.model = model
         self.optimizer = optimizer
@@ -39,6 +39,8 @@ class Trainer:
         self.master_process = master_process
         self.ddp_settings = ddp_settings or {}
         self.ddp = ddp_settings.get('ddp', False) if ddp_settings else False
+        self.ddp_rank = self.ddp_settings.get('ddp_rank', 0)
+        self.ddp_world_size = self.ddp_settings.get('ddp_world_size', 1)
         
         # Extract frequently used config values
         self.eval_interval = config['eval_interval']
@@ -326,7 +328,7 @@ class Trainer:
             if self.ddp:
                 self.model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1)
             
-            X, Y = get_batch_fn('train')  # NEW: different micro-batch each micro-step
+            X, Y = get_batch_fn('train', iter_num=iter_num, micro_step=micro_step)
             with ctx:
                 logits, loss = self.model(X, Y)
                 loss_sum += loss.detach()
@@ -500,7 +502,7 @@ class Trainer:
             t1 = time.time()
             dt = t1 - t0
             t0 = t1
-            if iter_num % self.log_interval == 0 and self.master_process:
+            if iter_num % self.log_interval == 0 and self.master_process and iter_num > 0:
                 # get loss as float. note: this is a CPU-GPU sync point
                 lossf = float(loss) if isinstance(loss, (float, int)) else (loss.item() if loss is not None else float('nan'))
                 if local_iter_num >= 5:  # let the training loop settle a bit
@@ -544,7 +546,7 @@ class Trainer:
             local_iter_num += 1
             
             # checkpoints
-            if iter_num > self.max_iters or iter_num % 1000 == 1:
+            if iter_num > self.max_iters or (iter_num % 1000 == 1 and iter_num > 1000):
                 if self.ddp:
                     torch.distributed.barrier(device_ids=[self.ddp_settings['ddp_local_rank']])  # Sync before validation
                 was_training = self.model.training

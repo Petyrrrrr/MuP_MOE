@@ -193,7 +193,7 @@ class MLP_MOE(nn.Module):
 
         selected = score.gather(-1, topk_indices).to(score.dtype)  # (B*T, num_act)
         #selected = selected / (selected.sum(-1, keepdim=True) + self.null_reg).to(score.dtype) #normalize experts
-        selected = selected / float(self.num_act)
+        selected = selected / np.sqrt(float(self.num_act))
 
         score = torch.zeros_like(score).scatter(1, topk_indices, selected)
         mask  = torch.zeros_like(score).scatter(1, topk_indices, 1.0)

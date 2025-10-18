@@ -34,7 +34,7 @@ from tqdm import tqdm
 warnings.filterwarnings("ignore", message=".*cuDNN SDPA backward.*", category=UserWarning)
 
 from model import GPTConfig, GPT
-from utils import get_batch, estimate_loss, get_lr
+from utils import get_batch, estimate_loss, get_lr, DeterministicBatchLoader
 from trainer import Trainer
 
 # -----------------------------------------------------------------------------
@@ -139,6 +139,7 @@ else:
     # if not ddp, we are running on a single gpu, and one process
     master_process = True
     seed_offset = 0
+    ddp_rank = 0
     ddp_world_size = 1
 tokens_per_iter = gradient_accumulation_steps * ddp_world_size * batch_size * block_size
 print(f"tokens per iteration will be: {tokens_per_iter:,}")
@@ -155,6 +156,25 @@ ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=
 
 # data directory for the data loader
 data_dir = os.path.join('data', dataset)
+
+# Set up deterministic batch loader if split batches are available
+deterministic_loader = None
+if dataset == 'cccc':
+    split_dir = os.path.join(data_dir, 'split')
+    if not os.path.isdir(split_dir):
+        raise FileNotFoundError(
+            f"Expected deterministic batches in {split_dir}. Run split_cccc_batches.py first."
+        )
+    deterministic_loader = DeterministicBatchLoader(
+        data_dir=data_dir,
+        block_size=block_size,
+        batch_size=batch_size,
+        grad_accum_steps=gradient_accumulation_steps,
+        world_size=ddp_world_size,
+    )
+    deterministic_loader.validate_max_iters(max_iters)
+    if master_process:
+        print(f"Using deterministic batch loader from {split_dir}")
 
 # init these up here, can override if init_from='resume' (i.e. from a checkpoint)
 iter_num = 0
@@ -248,7 +268,26 @@ if ddp:
     model = DDP(model, device_ids=[ddp_local_rank], find_unused_parameters=find_unused)
 
 # Create wrapper functions with closure over globals for the trainer
-def get_batch_wrapper(split):
+def _tokens_to_device_tensors(tokens_np):
+    tokens = torch.from_numpy(tokens_np.astype(np.int64))
+    x = tokens[:, :-1].contiguous()
+    y = tokens[:, 1:].contiguous()
+    if device_type == 'cuda':
+        x = x.pin_memory().to(device, non_blocking=True)
+        y = y.pin_memory().to(device, non_blocking=True)
+    else:
+        x, y = x.to(device), y.to(device)
+    return x, y
+
+
+def get_batch_wrapper(split, *, iter_num=None, micro_step=None):
+    if deterministic_loader is not None:
+        if split == 'train' and iter_num is not None and micro_step is not None:
+            tokens_np = deterministic_loader.get_train_tokens(iter_num, micro_step, ddp_rank)
+        else:
+            tokens_np = deterministic_loader.next_eval_tokens(split, ddp_rank)
+        return _tokens_to_device_tensors(tokens_np)
+
     return get_batch(split, data_dir, block_size, batch_size, device_type, device)
 
 def estimate_loss_wrapper(override_skip_val=None, collect_moe_stats=False):
@@ -256,6 +295,8 @@ def estimate_loss_wrapper(override_skip_val=None, collect_moe_stats=False):
     skip_val = override_skip_val if override_skip_val is not None else skip_val_loss
     # Get raw model for MOE stats collection
     raw_model = model.module if ddp else model
+    if deterministic_loader is not None:
+        deterministic_loader.reset_eval_cursors()
     return estimate_loss(raw_model, eval_iters, skip_val, get_batch_wrapper, ctx, collect_moe_stats, raw_model)
 
 def get_lr_wrapper(it):
@@ -275,8 +316,12 @@ if master_process:
         csv_logger = CSVLogWrapper(log, config=config, out_dir=out_dir, flush_every=flush_every)
 
 # Initialize trainer
-ddp_settings = {'ddp': ddp, 'ddp_local_rank': ddp_local_rank if ddp else None,
-                'ddp_world_size': ddp_world_size} if ddp else None
+ddp_settings = {
+    'ddp': ddp,
+    'ddp_local_rank': ddp_local_rank if ddp else None,
+    'ddp_world_size': ddp_world_size,
+    'ddp_rank': ddp_rank,
+} if ddp else None
 
 # Store additional config values needed by trainer
 config['iter_num'] = iter_num

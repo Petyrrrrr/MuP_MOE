@@ -1,0 +1,18 @@
+{
+  "batch_size": 480,
+  "block_size": 1024,
+  "dtype": "uint16",
+  "file_format": "raw_uint16",
+  "layout": {
+    "order": "C",
+    "shape": [
+      480,
+      1025
+    ]
+  },
+  "num_batches": 100,
+  "tokens_per_batch": 492000,
+  "tokens_per_input_sample": 1024,
+  "tokens_per_sequence": 1025,
+  "tokens_per_target_sample": 1024
+}
