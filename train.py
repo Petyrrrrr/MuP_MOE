@@ -24,7 +24,6 @@ from contextlib import nullcontext
 from functools import partial
 import warnings
 
-import numpy as np
 import torch
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
@@ -267,26 +266,40 @@ if ddp:
     find_unused = num_exp > 1
     model = DDP(model, device_ids=[ddp_local_rank], find_unused_parameters=find_unused)
 
-# Create wrapper functions with closure over globals for the trainer
-def _tokens_to_device_tensors(tokens_np):
-    tokens = torch.from_numpy(tokens_np.astype(np.int64))
-    x = tokens[:, :-1].contiguous()
-    y = tokens[:, 1:].contiguous()
-    if device_type == 'cuda':
-        x = x.pin_memory().to(device, non_blocking=True)
-        y = y.pin_memory().to(device, non_blocking=True)
-    else:
-        x, y = x.to(device), y.to(device)
-    return x, y
+# Cache for deterministic train batches (per iteration)
+_det_train_cache = {'iter': None, 'tensor': None}
+
+
+def _to_device_long(tensor, *, non_blocking):
+    return tensor.to(device=device, dtype=torch.long, non_blocking=non_blocking)
 
 
 def get_batch_wrapper(split, *, iter_num=None, micro_step=None):
     if deterministic_loader is not None:
+        non_blocking = device_type == 'cuda'
         if split == 'train' and iter_num is not None and micro_step is not None:
-            tokens_np = deterministic_loader.get_train_tokens(iter_num, micro_step, ddp_rank)
-        else:
-            tokens_np = deterministic_loader.next_eval_tokens(split, ddp_rank)
-        return _tokens_to_device_tensors(tokens_np)
+            if _det_train_cache['iter'] != iter_num:
+                global_tokens = deterministic_loader.get_train_batch(iter_num)
+                tensor = torch.from_numpy(global_tokens)
+                _det_train_cache['iter'] = iter_num
+                _det_train_cache['tensor'] = tensor
+
+            global_tensor = _det_train_cache['tensor']
+            micro_batch_size = batch_size
+            start = (micro_step * ddp_world_size + ddp_rank) * micro_batch_size
+            micro_tokens = global_tensor.narrow(0, start, micro_batch_size)
+            x = micro_tokens[:, :-1]
+            y = micro_tokens[:, 1:]
+            return _to_device_long(x, non_blocking=non_blocking), _to_device_long(y, non_blocking=non_blocking)
+
+        eval_split = split
+        if split == 'train':
+            eval_split = 'train'
+        tokens_np = deterministic_loader.next_eval_tokens(eval_split, ddp_rank)
+        tokens_tensor = torch.from_numpy(tokens_np)
+        x = tokens_tensor[:, :-1]
+        y = tokens_tensor[:, 1:]
+        return _to_device_long(x, non_blocking=non_blocking), _to_device_long(y, non_blocking=non_blocking)
 
     return get_batch(split, data_dir, block_size, batch_size, device_type, device)
 

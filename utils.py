@@ -100,12 +100,21 @@ class DeterministicBatchLoader:
             batch_path = self.split_root / split / f"batch_{batch_idx:05d}.bin"
             if not batch_path.exists():
                 raise FileNotFoundError(f"Missing batch file: {batch_path}")
-            cache['data'] = np.memmap(
-                batch_path,
-                dtype=np.uint16,
-                mode='r',
-                shape=(self.global_batch_size, self.tokens_per_sequence),
-            )
+            memmap_mode = 'r+'
+            try:
+                cache['data'] = np.memmap(
+                    batch_path,
+                    dtype=np.uint16,
+                    mode=memmap_mode,
+                    shape=(self.global_batch_size, self.tokens_per_sequence),
+                )
+            except PermissionError:
+                cache['data'] = np.memmap(
+                    batch_path,
+                    dtype=np.uint16,
+                    mode='r',
+                    shape=(self.global_batch_size, self.tokens_per_sequence),
+                )
             cache['index'] = batch_idx
         return cache['data']
 
@@ -124,7 +133,7 @@ class DeterministicBatchLoader:
                 f"Slice [{start}:{end}] exceeds batch size {batch.shape[0]} for split '{split}' "
                 f"(micro_step={micro_step}, rank={rank})"
             )
-        return np.array(batch[start:end], dtype=np.uint16)
+        return batch[start:end]
 
     def get_train_tokens(self, iter_num, micro_step, rank):
         if iter_num < 0 or iter_num >= self._num_batches['train']:
@@ -132,6 +141,13 @@ class DeterministicBatchLoader:
                 f"iter_num {iter_num} out of bounds for {self._num_batches['train']} train batches"
             )
         return self._slice_microbatch('train', iter_num, micro_step, rank)
+
+    def get_train_batch(self, iter_num):
+        if iter_num < 0 or iter_num >= self._num_batches['train']:
+            raise IndexError(
+                f"iter_num {iter_num} out of bounds for {self._num_batches['train']} train batches"
+            )
+        return self._load_batch('train', iter_num)
 
     def _total_eval_microbatches(self, split):
         return self._num_batches[split] * self.grad_accum_steps
