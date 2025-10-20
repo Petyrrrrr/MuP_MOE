@@ -2,34 +2,33 @@
 # muP hyperparameter transfer with MOE - Multi-GPU DDP version
 
 # Number of GPUs to use for DDP training
-NUM_GPUS=4
+NUM_GPUS=8
 
 # DDP launcher using torchrun
-export CUDA_VISIBLE_DEVICES=0,1,2,3
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 
 LAUNCHER="torchrun --standalone --nproc_per_node=$NUM_GPUS"
 
 timestamp=$(python -c "from datetime import datetime; print(datetime.now().strftime('%Y%m%d_%H%M%S'))")
 # Configuration parameters matching run-multi-gpu.py
-max_iters=3000
+max_iters=5000
 warmup_iters=300
-router_lr_mult=0.25
+router_lr_mult=0.5
 init_std=0.02
 moe_tau=0.02
 n_layer=14
-batch_size=60
-gradient_accumulation_steps=8
+batch_size=30
+gradient_accumulation_steps=16
 t_ema_inv=0.0
-bias_update_interval=5
+bias_update_interval=1
 moe_bias_lr_mult=1.0
-# Test with one configuration - you can expand this loop
-for width in 512
+for width in 384
 do
-    for num_exp in 12
+    for num_exp in 64
     do
-        for lr in 0.01
+        for lr in 0.006
         do
-            for seed in 0
+            for seed in 1
             do
                 head_size=64
                 n_heads=$((width / head_size))
@@ -38,14 +37,14 @@ do
                 mup_width_multiplier=$(echo "scale=8; $width/$mup_base_width" | bc -l)
                 num_act=$((num_exp/4))
                 weight_decay=0.0
-                moe_bias_lr=$(echo "$moe_bias_lr_mult * $lr" | bc -l)
+                moe_bias_lr=0.1
                 out_dir="run_data/mutransfer_lr_cccc/out_${timestamp}/width${width}_depth${n_layer}_experts${num_exp}_active${num_act}_seed${seed}_lr${lr}"
 
                 $LAUNCHER train.py \
                     --out_dir=$out_dir \
                     --eval_interval=1 \
                     --log_interval=1 \
-                    --eval_iters=200 \
+                    --eval_iters=$((100 * gradient_accumulation_steps / NUM_GPUS)) \
                     --eval_only=False \
                     --skip_val_loss=True \
                     --always_save_checkpoint=False \

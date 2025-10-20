@@ -544,7 +544,7 @@ class Trainer:
             local_iter_num += 1
             
             # checkpoints
-            if iter_num > self.max_iters or iter_num % 1000 == 1:
+            if iter_num > self.max_iters or (iter_num % 1000 == 1 and iter_num > 1000):
                 if self.ddp:
                     torch.distributed.barrier(device_ids=[self.ddp_settings['ddp_local_rank']])  # Sync before validation
                 was_training = self.model.training
