@@ -70,6 +70,8 @@ class Trainer:
         self.skip_val_loss = config['skip_val_loss']
         self.max_nan_losses = config.get('max_nan_losses', 50)  # Default to 50 if not specified
         self.bias_update_interval = config.get('bias_update_interval')
+        # Persist recent MOE stats so we can log them even when updates are sparse
+        self._last_moe_max_dev = {}
         
         # Get raw model (unwrap DDP if needed)
         self.raw_model = model.module if self.ddp else model
@@ -493,6 +495,15 @@ class Trainer:
                 self.raw_model, self.num_exp, self.moe_load_balance_method, 
                 self.moe_bias_lr, self.moe_bias_momentum_enabled, iter_num
             )
+            if moe_layer_stats:
+                for stats in moe_layer_stats:
+                    layer_idx = stats.get('layer')
+                    max_dev_value = stats.get('max_deviation')
+                    try:
+                        layer_idx_int = int(layer_idx)
+                        self._last_moe_max_dev[layer_idx_int] = float(max_dev_value)
+                    except (TypeError, ValueError):
+                        continue
             
             # Log expert usage to CSV files
             if self.csv_logger and moe_layer_stats:
@@ -518,7 +529,24 @@ class Trainer:
                 if grad_norm is not None:
                     postfix_dict['grad'] = f'{grad_norm:.3f}'
                 pbar.set_postfix(postfix_dict)
-                
+
+                if self.wandb_log and self.wandb_run:
+                    wandb_log_dict = {
+                        'iter': iter_num,
+                        'train/loss': lossf,
+                        'lr': lr,
+                        'time/iter_ms': dt * 1000.0,
+                    }
+                    if running_mfu >= 0:
+                        wandb_log_dict['train/mfu'] = running_mfu * 100.0
+                    if grad_norm is not None:
+                        wandb_log_dict['grad/norm'] = grad_norm
+                    for layer_idx, max_dev in self._last_moe_max_dev.items():
+                        wandb_log_dict[f'moe/layer_{layer_idx}/max_deviation'] = max_dev
+                    if self._last_moe_max_dev:
+                        wandb_log_dict['train/max_deviation'] = max(self._last_moe_max_dev.values())
+                    self.wandb_run.log(wandb_log_dict, step=iter_num)
+
                 # Update MOE layer progress bars in place
                 if moe_layer_stats and moe_pbars:
                     for stats in moe_layer_stats:

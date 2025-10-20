@@ -16,6 +16,48 @@ from dataclasses import dataclass, asdict
 import threading
 import queue
 
+
+def _load_env_file(env_path: Path) -> Dict[str, str]:
+    """Parse simple KEY=VALUE lines from a .env style file."""
+    env_vars: Dict[str, str] = {}
+    if not env_path.exists():
+        return env_vars
+
+    for line in env_path.read_text().splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith('#') or '=' not in stripped:
+            continue
+        key, value = stripped.split('=', 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key:
+            env_vars[key] = value
+    return env_vars
+
+
+def _bootstrap_wandb_env() -> bool:
+    """Load W&B credentials from .env files if present."""
+    script_dir = Path(__file__).resolve().parent
+    repo_root = script_dir.parent
+
+    candidate_paths = [repo_root / '.env', script_dir / '.env']
+    for path in candidate_paths:
+        for key, value in _load_env_file(path).items():
+            os.environ.setdefault(key, value)
+
+    # Normalize alternate key names to WANDB_API_KEY
+    wandb_key = os.environ.get('WANDB_API_KEY')
+    if not wandb_key:
+        alt_key = os.environ.get('WANDB_API') or os.environ.get('WANDB_KEY')
+        if alt_key:
+            os.environ['WANDB_API_KEY'] = alt_key
+            wandb_key = alt_key
+
+    return bool(wandb_key)
+
+
+_WANDB_KEY_PRESENT = _bootstrap_wandb_env()
+
 # Enable PyTorch CUDA expandable segments for better memory management with MoE models
 os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
 
@@ -69,8 +111,16 @@ class CleanOutputProcessor:
 
 class MultiGPURunner:
     """Manages multi-GPU job execution with clean output and advanced monitoring."""
-    
-    def __init__(self, num_gpus: int = 8, max_jobs_per_gpu: int = 1, clean_output: bool = True):
+
+    def __init__(
+        self,
+        num_gpus: int = 8,
+        max_jobs_per_gpu: int = 1,
+        clean_output: bool = True,
+        wandb_project: Optional[str] = None,
+        wandb_run_prefix: Optional[str] = None,
+        wandb_enabled: Optional[bool] = None,
+    ):
         self.num_gpus = num_gpus
         self.max_jobs_per_gpu = max_jobs_per_gpu
         self.clean_output = clean_output
@@ -83,6 +133,33 @@ class MultiGPURunner:
         self.job_queue = queue.Queue()
         self.active_processors = {}  # Track active output processors
         self.gpu_available = {i: threading.Semaphore(max_jobs_per_gpu) for i in range(num_gpus)}  # Track GPU availability
+
+        # Weights & Biases settings sourced from environment, with sensible defaults
+        self.wandb_enabled = (
+            _WANDB_KEY_PRESENT if wandb_enabled is None else bool(wandb_enabled)
+        ) and bool(os.environ.get('WANDB_API_KEY'))
+        self.wandb_project = (
+            wandb_project
+            or os.environ.get('WANDB_PROJECT')
+            or 'mutransfer_lr_cccc'
+        )
+        self.wandb_run_prefix = (
+            wandb_run_prefix
+            or os.environ.get('WANDB_RUN_PREFIX')
+            or 'job'
+        )
+        self.wandb_mode = os.environ.get('WANDB_MODE', '').lower()
+
+        if self.wandb_mode == 'disabled':
+            # Respect explicit disable mode even if a key is set
+            self.wandb_enabled = False
+
+        if self.wandb_enabled:
+            print(
+                f"Weights & Biases logging enabled (project: {self.wandb_project}, mode: {self.wandb_mode or 'online'})"
+            )
+        else:
+            print("Weights & Biases logging disabled (missing key or explicitly turned off).")
         
     def create_log_directory(self, base_path: str = "/home/ubuntu/MuP_MOE/std_out/mutransfer_lr_cccc") -> str:
         """Create and return the log directory path with organized structure."""
@@ -100,14 +177,14 @@ class MultiGPURunner:
     def generate_configurations(self) -> List[Dict]:
         """Generate all configurations to run."""
         configs = []
-        wid_exp = [(384, 32, 10)]
-        lrs = [0.0005, 0.001, 0.002, 0.004, 0.008, 0.016, 0.032, 0.064, ]
+        wid_exp = [(384, 64, 10)]
+        lrs = [0.004, 0.005, 0.006, 0.007, 0.008, 0.010, 0.012, 0.014]
         seeds = [1]
         init_std = 0.02
         moe_tau = 0.02
         n_layer = 14
-        batch_size = 48
-        gradient_accumulation_steps = 10
+        batch_size = 40
+        gradient_accumulation_steps = 12
         t_ema_inv = 0.0
         bias_update_interval = 1
         for it in range(1):
@@ -145,10 +222,20 @@ class MultiGPURunner:
         
         return configs
     
-    def build_command(self, config: Dict) -> Tuple[List[str], str]:
+    def _format_wandb_run_name(self, job_desc: str) -> str:
+        prefix = self.wandb_run_prefix.strip()
+        return f"{prefix}_{job_desc}" if prefix else job_desc
+
+    def build_command(self, job: Job, job_desc: str) -> Tuple[List[str], str, Optional[str]]:
         """Build the command list for a given configuration."""
-        out_dir = f"run_data/mutransfer_lr_cccc/out_{self.timestamp}/width{config['width']}_depth{config['n_layer']}_experts{config['num_exp']}_active{config['num_act']}_seed{config['seed']}_lr{config['lr']}_alpha{config['alpha']}_mult{config['router_lr_mult']}"
-        
+        config = job.config
+        out_dir = (
+            f"run_data/mutransfer_lr_cccc/out_{self.timestamp}/"
+            f"width{config['width']}_depth{config['n_layer']}_experts{config['num_exp']}"
+            f"_active{config['num_act']}_seed{config['seed']}_lr{config['lr']}_alpha{config['alpha']}"
+            f"_mult{config['router_lr_mult']}"
+        )
+
         cmd_args = [
             "python3", "-u", "train.py",  # -u for unbuffered output
             f"--out_dir={out_dir}",
@@ -160,7 +247,6 @@ class MultiGPURunner:
             "--always_save_checkpoint=False",
             "--never_save_checkpoint=True",
             "--init_from=scratch",
-            "--wandb_log=False",
             "--csv_log=True",
             f"--warmup_iters={config['warmup_iters']}",
             "--dataset=cccc",
@@ -203,8 +289,18 @@ class MultiGPURunner:
             "--compile=False",
             f"--bias_update_interval={config['bias_update_interval']}"
         ]
-        
-        return cmd_args, out_dir
+
+        wandb_run_name: Optional[str] = None
+        if self.wandb_enabled:
+            wandb_run_name = self._format_wandb_run_name(job_desc)
+            cmd_args.append("--wandb_log=True")
+            if self.wandb_project:
+                cmd_args.append(f"--wandb_project={self.wandb_project}")
+            cmd_args.append(f"--wandb_run_name={wandb_run_name}")
+        else:
+            cmd_args.append("--wandb_log=False")
+
+        return cmd_args, out_dir, wandb_run_name
     
     def process_output_stream(self, stream, processor: CleanOutputProcessor):
         """Process output stream line by line with cleaning."""
@@ -224,11 +320,11 @@ class MultiGPURunner:
             job.status = "running"
             job.start_time = time.time()
             
-            # Build command
-            cmd_args, out_dir = self.build_command(job.config)
-            
             # Create descriptive filename
             job_desc = f"job_{job.job_id:04d}_gpu{gpu_id}_w{job.config['width']}_exp{job.config['num_exp']}_lr{job.config['lr']:.2e}_seed{job.config['seed']}_alpha{job.config['alpha']}_mult{job.config['router_lr_mult']}"
+
+            # Build command (includes wandb metadata when enabled)
+            cmd_args, out_dir, wandb_run_name = self.build_command(job, job_desc)
             
             # File paths
             log_file = self.log_dir / "stdout" / f"{job_desc}.log"
@@ -245,7 +341,9 @@ class MultiGPURunner:
                 "start_time": job.start_time,
                 "log_file": str(log_file),
                 "err_file": str(err_file),
-                "clean_output": self.clean_output
+                "clean_output": self.clean_output,
+                "wandb_project": self.wandb_project if self.wandb_enabled else None,
+                "wandb_run_name": wandb_run_name if self.wandb_enabled else None
             }
             
             with open(meta_file, 'w') as f:
@@ -424,7 +522,10 @@ class MultiGPURunner:
             "num_gpus": self.num_gpus,
             "max_jobs_per_gpu": self.max_jobs_per_gpu,
             "clean_output": self.clean_output,
-            "total_jobs": len(self.jobs)
+            "total_jobs": len(self.jobs),
+            "wandb_enabled": self.wandb_enabled,
+            "wandb_project": self.wandb_project if self.wandb_enabled else None,
+            "wandb_run_prefix": self.wandb_run_prefix if self.wandb_enabled else None
         }
         
         config_file = self.log_dir / "runner_config.json"
@@ -531,13 +632,24 @@ def main():
     parser.add_argument("--gpus", type=int, default=8, help="Number of GPUs to use")
     parser.add_argument("--jobs-per-gpu", type=int, default=1, help="Max concurrent jobs per GPU")
     parser.add_argument("--no-clean", action="store_true", help="Disable output cleaning")
-    
+    parser.add_argument("--wandb-project", type=str, default=None, help="Override W&B project name")
+    parser.add_argument(
+        "--wandb-run-prefix",
+        type=str,
+        default=None,
+        help="Prefix to prepend to generated W&B run names",
+    )
+    parser.add_argument("--no-wandb", action="store_true", help="Disable W&B logging")
+
     args = parser.parse_args()
-    
+
     runner = MultiGPURunner(
         num_gpus=args.gpus,
         max_jobs_per_gpu=args.jobs_per_gpu,
-        clean_output=not args.no_clean
+        clean_output=not args.no_clean,
+        wandb_project=args.wandb_project,
+        wandb_run_prefix=args.wandb_run_prefix,
+        wandb_enabled=None if not args.no_wandb else False,
     )
     runner.run()
 
