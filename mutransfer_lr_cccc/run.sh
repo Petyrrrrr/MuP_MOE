@@ -17,16 +17,16 @@ router_lr_mult=0.5
 init_std=0.02
 moe_tau=0.02
 n_layer=14
-batch_size=60
-gradient_accumulation_steps=8
+batch_size=15
+gradient_accumulation_steps=32
 t_ema_inv=0.0
 bias_update_interval=1
 moe_bias_lr_mult=1.0
-for width in 384
+for width in 1280
 do
-    for num_exp in 8
+    for num_exp in 24
     do
-        for lr in 0.008
+        for lr in 0.007
         do
             for seed in 1
             do
@@ -50,7 +50,7 @@ do
                     --always_save_checkpoint=False \
                     --never_save_checkpoint=True \
                     --init_from='scratch' \
-                    --wandb_log=False \
+                    --wandb_log=True \
                     --csv_log=True \
                     --warmup_iters=$warmup_iters \
                     --dataset='cccc' \

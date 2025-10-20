@@ -50,8 +50,8 @@ never_save_checkpoint = False # if True, never save a checkpoint
 init_from = 'scratch' # 'scratch' or 'resume' or 'gpt2*'
 # wandb logging
 wandb_log = False # disabled by default
-wandb_project = 'owt'
-wandb_run_name = 'gpt2' # 'run' + str(time.time())
+wandb_project = 'cccc'
+wandb_run_name = 'run' + str(time.time())
 # csv logging
 csv_log = False # If enabled, logs stats to a csv file
 flush_every = 100 # how often to flush, set to 0 to only flush on close
