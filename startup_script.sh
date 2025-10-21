@@ -60,3 +60,4 @@ echo ""
 
 git config --global user.email "jtz2003@qq.com"
 git config --global user.name "Petyrrrrr"
+bash wandb_start.sh
