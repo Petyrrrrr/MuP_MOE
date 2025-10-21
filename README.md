@@ -50,7 +50,8 @@ By default, h is sigmoid (so biases don't need to overflow) and s is softmax (wh
 
 These claims are pretty non-rigorous, and I'm not sure how tested/statistically significant these are.
 
-====Comments Oct.21st
+====Comments Oct.21st====
+
 (-1) HP transfer on hidden MLP size (no MOE): I tried to run some stuff on a dense model, varying only the hidden MLP dim, and it seems like I get good transfer following the recipe of Spectral Conditioning for Feature Learning, which is basically that you scale down 1/ffn_mult on the forward pass and keep everything (LR and init) the same. I did see a pretty significant boost in val loss by increasing ffn_mult up to 100.
 (-1.a) The transfer parametrization was supported by The Hidden Width of Deep ResNets, but I think more rigorous tests may be required to make a conclusion.
 
