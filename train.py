@@ -23,7 +23,8 @@ import pickle
 from contextlib import nullcontext
 from functools import partial
 import warnings
-
+import random
+import numpy as np
 import torch
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
@@ -146,6 +147,10 @@ print(f"tokens per iteration will be: {tokens_per_iter:,}")
 if master_process:
     os.makedirs(out_dir, exist_ok=True)
 torch.manual_seed(seed + seed_offset)
+random.seed(seed + seed_offset)
+np.random.seed(seed + seed_offset)
+torch.manual_seed(seed + seed_offset)
+torch.cuda.manual_seed_all(seed + seed_offset)
 torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
 torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
 device_type = 'cuda' if 'cuda' in device else 'cpu' # for later use in torch.autocast

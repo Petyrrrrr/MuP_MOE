@@ -2,10 +2,10 @@
 # muP hyperparameter transfer with MOE - Multi-GPU DDP version
 
 # Number of GPUs to use for DDP training
-NUM_GPUS=8
+NUM_GPUS=4
 
 # DDP launcher using torchrun
-export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+export CUDA_VISIBLE_DEVICES=0,1,2,3
 
 LAUNCHER="torchrun --standalone --nproc_per_node=$NUM_GPUS"
 
@@ -17,14 +17,14 @@ router_lr_mult=0.5
 init_std=0.02
 moe_tau=0.02
 n_layer=14
-batch_size=15
-gradient_accumulation_steps=32
+batch_size=20
+gradient_accumulation_steps=24
 t_ema_inv=0.0
 bias_update_interval=1
 moe_bias_lr_mult=1.0
-for width in 1280
+for width in 512
 do
-    for num_exp in 24
+    for num_exp in 48
     do
         for lr in 0.007
         do
@@ -92,6 +92,8 @@ do
                     --dtype='bfloat16' \
                     --compile=False \
                     --bias_update_interval=$bias_update_interval \
+                    --wandb_project=cccc_lr_7e-3 \
+                    --wandb_run_name=width${width}_e${num_exp}_a${num_act} \
                     >> /home/ubuntu/MuP_MOE/std_out/debugged_outlog_cccc_${timestamp}
             done
         done
