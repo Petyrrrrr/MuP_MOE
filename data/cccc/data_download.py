@@ -11,8 +11,8 @@ from pathlib import Path
 from tqdm import tqdm
 from datasets import load_dataset
 
-TRAIN_LIMIT = 2_000_000
-CHECKPOINT_INTERVAL = 1_000_000
+TRAIN_LIMIT = 85_000_000
+CHECKPOINT_INTERVAL = 20_000_000
 
 DEFAULT_BIG_DIR = Path('/mnt/local')
 
