@@ -5,7 +5,7 @@
 NUM_GPUS=4
 
 # DDP launcher using torchrun
-export CUDA_VISIBLE_DEVICES=0,1,2,3
+export CUDA_VISIBLE_DEVICES=4,5,6,7
 
 LAUNCHER="torchrun --standalone --nproc_per_node=$NUM_GPUS"
 
@@ -24,7 +24,7 @@ bias_update_interval=1
 moe_bias_lr_mult=1.0
 for width in 512
 do
-    for num_exp in 48
+    for num_exp in 80
     do
         for lr in 0.007
         do
@@ -93,7 +93,7 @@ do
                     --compile=False \
                     --bias_update_interval=$bias_update_interval \
                     --wandb_project=cccc_lr_7e-3 \
-                    --wandb_run_name=width${width}_e${num_exp}_a${num_act} \
+                    --wandb_run_name=width${width}_e${num_exp}_a${num_act}_server_a \
                     >> /home/ubuntu/MuP_MOE/std_out/debugged_outlog_cccc_${timestamp}
             done
         done

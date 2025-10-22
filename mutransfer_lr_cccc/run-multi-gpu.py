@@ -1,7 +1,4 @@
 #!/usr/bin/env python3
-"""
-Ultimate multi-GPU runner combining clean output processing with advanced monitoring features.
-"""
 
 import os
 import subprocess
@@ -16,6 +13,13 @@ from dataclasses import dataclass, asdict
 import threading
 import queue
 
+# Enable PyTorch CUDA expandable segments for better memory management with MoE models
+os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
+
+NUM_GPUS = 8
+VISIBLE_DEVICES = list(range(NUM_GPUS))
+assert len(VISIBLE_DEVICES) == NUM_GPUS
+WANDB_ENABLED = False
 
 def _load_env_file(env_path: Path) -> Dict[str, str]:
     """Parse simple KEY=VALUE lines from a .env style file."""
@@ -57,9 +61,6 @@ def _bootstrap_wandb_env() -> bool:
 
 
 _WANDB_KEY_PRESENT = _bootstrap_wandb_env()
-
-# Enable PyTorch CUDA expandable segments for better memory management with MoE models
-os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
 
 @dataclass
 class Job:
@@ -114,14 +115,15 @@ class MultiGPURunner:
 
     def __init__(
         self,
-        num_gpus: int = 8,
+        num_gpus: int = NUM_GPUS,
         max_jobs_per_gpu: int = 1,
         clean_output: bool = True,
         wandb_project: Optional[str] = None,
-        wandb_run_prefix: Optional[str] = None,
         wandb_enabled: Optional[bool] = None,
     ):
-        self.num_gpus = num_gpus
+        # Use VISIBLE_DEVICES if set, otherwise use 0 to num_gpus-1
+        self.gpu_ids = VISIBLE_DEVICES if VISIBLE_DEVICES else list(range(num_gpus))
+        self.num_gpus = len(self.gpu_ids)
         self.max_jobs_per_gpu = max_jobs_per_gpu
         self.clean_output = clean_output
         self.log_dir = None
@@ -135,29 +137,15 @@ class MultiGPURunner:
         self.gpu_available = {i: threading.Semaphore(max_jobs_per_gpu) for i in range(num_gpus)}  # Track GPU availability
 
         # Weights & Biases settings sourced from environment, with sensible defaults
-        self.wandb_enabled = (
-            _WANDB_KEY_PRESENT if wandb_enabled is None else bool(wandb_enabled)
-        ) and bool(os.environ.get('WANDB_API_KEY'))
+        self.wandb_enabled = WANDB_ENABLED and bool(os.environ.get('WANDB_API_KEY'))
         self.wandb_project = (
             wandb_project
             or os.environ.get('WANDB_PROJECT')
             or 'mutransfer_lr_cccc'
         )
-        self.wandb_run_prefix = (
-            wandb_run_prefix
-            or os.environ.get('WANDB_RUN_PREFIX')
-            or 'job'
-        )
-        self.wandb_mode = os.environ.get('WANDB_MODE', '').lower()
-
-        if self.wandb_mode == 'disabled':
-            # Respect explicit disable mode even if a key is set
-            self.wandb_enabled = False
 
         if self.wandb_enabled:
-            print(
-                f"Weights & Biases logging enabled (project: {self.wandb_project}, mode: {self.wandb_mode or 'online'})"
-            )
+            print( f"Weights & Biases logging enabled (project: {self.wandb_project}, mode: {'online'})")
         else:
             print("Weights & Biases logging disabled (missing key or explicitly turned off).")
         
@@ -217,14 +205,12 @@ class MultiGPURunner:
                                 'weight_decay' : weight_decay,
                                 'bias_update_interval' : bias_update_interval,
                                 'alpha' : 1.0,
+                                'run_name' : 'width${width}_e${num_exp}_a${num_act}',
+                                'project_name' : 'mutransfer_sweep'+self.timestamp,
                             }
                             configs.append(config)
         
         return configs
-    
-    def _format_wandb_run_name(self, job_desc: str) -> str:
-        prefix = self.wandb_run_prefix.strip()
-        return f"{prefix}_{job_desc}" if prefix else job_desc
 
     def build_command(self, job: Job, job_desc: str) -> Tuple[List[str], str, Optional[str]]:
         """Build the command list for a given configuration."""
@@ -292,11 +278,9 @@ class MultiGPURunner:
 
         wandb_run_name: Optional[str] = None
         if self.wandb_enabled:
-            wandb_run_name = self._format_wandb_run_name(job_desc)
             cmd_args.append("--wandb_log=True")
-            if self.wandb_project:
-                cmd_args.append(f"--wandb_project={self.wandb_project}")
-            cmd_args.append(f"--wandb_run_name={wandb_run_name}")
+            cmd_args.append(f"--wandb_project={config['project_name']}")
+            cmd_args.append(f"--wandb_run_name={config['run_name']}")
         else:
             cmd_args.append("--wandb_log=False")
 
@@ -321,7 +305,8 @@ class MultiGPURunner:
             job.start_time = time.time()
             
             # Create descriptive filename
-            job_desc = f"job_{job.job_id:04d}_gpu{gpu_id}_w{job.config['width']}_exp{job.config['num_exp']}_lr{job.config['lr']:.2e}_seed{job.config['seed']}_alpha{job.config['alpha']}_mult{job.config['router_lr_mult']}"
+            physical_gpu = self.gpu_ids[gpu_id]
+            job_desc = f"job_{job.job_id:04d}_gpu{physical_gpu}_w{job.config['width']}_exp{job.config['num_exp']}_lr{job.config['lr']:.2e}_seed{job.config['seed']}_alpha{job.config['alpha']}_mult{job.config['router_lr_mult']}"
 
             # Build command (includes wandb metadata when enabled)
             cmd_args, out_dir, wandb_run_name = self.build_command(job, job_desc)
@@ -348,12 +333,12 @@ class MultiGPURunner:
             
             with open(meta_file, 'w') as f:
                 json.dump(metadata, f, indent=2)
-            
-            print(f"[GPU {gpu_id}] Starting job {job.job_id}: w={job.config['width']}, exp={job.config['num_exp']}, lr={job.config['lr']:.2e}")
+
+            print(f"[GPU {physical_gpu}] Starting job {job.job_id}: w={job.config['width']}, exp={job.config['num_exp']}, lr={job.config['lr']:.2e}")
             
             # Set environment for this GPU
             env = os.environ.copy()
-            env['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
+            env['CUDA_VISIBLE_DEVICES'] = str(self.gpu_ids[gpu_id])
             env['PYTHONUNBUFFERED'] = '1'  # Ensure unbuffered output
             
             # Run the command
@@ -410,13 +395,13 @@ class MultiGPURunner:
                 job.status = "completed"
                 with self.lock:
                     self.completed_jobs += 1
-                print(f"[GPU {gpu_id}] Completed job {job.job_id} in {job.duration():.1f}s")
+                print(f"[GPU {physical_gpu}] Completed job {job.job_id} in {job.duration():.1f}s")
                 success = True
             else:
                 job.status = "failed"
                 with self.lock:
                     self.failed_jobs += 1
-                print(f"[GPU {gpu_id}] Failed job {job.job_id} with return code {return_code}")
+                print(f"[GPU {physical_gpu}] Failed job {job.job_id} with return code {return_code}")
                 success = False
             
             # Update metadata with completion info
@@ -437,7 +422,7 @@ class MultiGPURunner:
             job.end_time = time.time()
             with self.lock:
                 self.failed_jobs += 1
-            print(f"[GPU {gpu_id}] Exception in job {job.job_id}: {e}")
+            print(f"[GPU {self.gpu_ids[gpu_id]}] Exception in job {job.job_id}: {e}")
             
             # Update metadata with error info
             metadata.update({
@@ -494,9 +479,8 @@ class MultiGPURunner:
     
     def run(self):
         """Main execution method."""
-        print(f"Starting Ultimate Multi-GPU Runner")
+        print(f"Starting Multi-GPU Runner (one GPU per job)")
         print(f"GPUs: {self.num_gpus}")
-        print(f"Max jobs per GPU: {self.max_jobs_per_gpu}")
         print(f"Output cleaning: {'Enabled' if self.clean_output else 'Disabled'}")
         print(f"{'='*60}")
         
@@ -524,8 +508,6 @@ class MultiGPURunner:
             "clean_output": self.clean_output,
             "total_jobs": len(self.jobs),
             "wandb_enabled": self.wandb_enabled,
-            "wandb_project": self.wandb_project if self.wandb_enabled else None,
-            "wandb_run_prefix": self.wandb_run_prefix if self.wandb_enabled else None
         }
         
         config_file = self.log_dir / "runner_config.json"
@@ -633,12 +615,6 @@ def main():
     parser.add_argument("--jobs-per-gpu", type=int, default=1, help="Max concurrent jobs per GPU")
     parser.add_argument("--no-clean", action="store_true", help="Disable output cleaning")
     parser.add_argument("--wandb-project", type=str, default=None, help="Override W&B project name")
-    parser.add_argument(
-        "--wandb-run-prefix",
-        type=str,
-        default=None,
-        help="Prefix to prepend to generated W&B run names",
-    )
     parser.add_argument("--no-wandb", action="store_true", help="Disable W&B logging")
 
     args = parser.parse_args()
@@ -648,8 +624,7 @@ def main():
         max_jobs_per_gpu=args.jobs_per_gpu,
         clean_output=not args.no_clean,
         wandb_project=args.wandb_project,
-        wandb_run_prefix=args.wandb_run_prefix,
-        wandb_enabled=None if not args.no_wandb else False,
+        wandb_enabled=WANDB_ENABLED and not args.no_wandb,
     )
     runner.run()
 
