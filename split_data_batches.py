@@ -138,23 +138,26 @@ def process_split(
     output_dir = dataset_dir / "split" / split
     _ensure_output_dir(output_dir, overwrite=overwrite)
 
-    population_size = len(data) - tokens_per_sequence + 1
-    if population_size <= 0:
+    # Partition dataset into non-overlapping chunks to ensure no token repetition
+    num_chunks = len(data) // tokens_per_sequence
+    if num_chunks <= 0:
         raise ValueError(f"File {data_path} is too small for block_size={block_size}")
 
     required_sequences = num_batches * batch_size
-    if required_sequences > population_size:
+    if required_sequences > num_chunks:
         raise ValueError(
-            f"Not enough unique start positions in {split}.bin to form {num_batches} batches "
-            f"of size {batch_size}. Available positions: {population_size}."
+            f"Not enough non-overlapping sequences in {split}.bin to form {num_batches} batches "
+            f"of size {batch_size}. Available sequences: {num_chunks}, required: {required_sequences}."
         )
 
     if shuffle:
         if rng is None:
             rng = np.random.default_rng(shuffle_seed)
-        sequence_indices = rng.choice(population_size, size=required_sequences, replace=False)
+        # Sample chunk IDs and convert to sequence start positions
+        chunk_ids = rng.choice(num_chunks, size=required_sequences, replace=False)
+        sequence_indices = chunk_ids * tokens_per_sequence
     else:
-        sequence_indices = np.arange(required_sequences, dtype=np.int64)
+        sequence_indices = np.arange(required_sequences, dtype=np.int64) * tokens_per_sequence
 
     _consume_batches(
         data,

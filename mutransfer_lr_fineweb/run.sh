@@ -2,8 +2,9 @@
 # muP hyperparameter transfer with MOE - Multi-GPU DDP version
 
 # Number of GPUs to use for DDP training
-NUM_GPUS=4
-export CUDA_VISIBLE_DEVICES=0,1,2,3
+NUM_GPUS=8
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+
 LAUNCHER="torchrun --standalone --nproc_per_node=$NUM_GPUS"
 
 timestamp=$(python -c "from datetime import datetime; print(datetime.now().strftime('%Y%m%d_%H%M%S'))")
@@ -16,15 +17,15 @@ moe_tau=0.02
 n_layer=14
 
 total_batch_size=480
-gradient_accumulation_steps=12
-batch_size=40
+gradient_accumulation_steps=16
+batch_size=30
 
 t_ema_inv=0.0
 bias_update_interval=1
 moe_bias_lr_mult=1.0
-for width in 512
+for width in 640
 do
-    for num_exp in 16
+    for num_exp in 24
     do
         for lr in 0.007
         do
@@ -50,10 +51,10 @@ do
                     --always_save_checkpoint=False \
                     --never_save_checkpoint=True \
                     --init_from='scratch' \
-                    --wandb_log=False \
+                    --wandb_log=True \
                     --csv_log=True \
                     --warmup_iters=$warmup_iters \
-                    --dataset='cccc' \
+                    --dataset='fineweb' \
                     --gradient_accumulation_steps=$gradient_accumulation_steps \
                     --batch_size=$batch_size \
                     --block_size=1024 \
@@ -92,9 +93,9 @@ do
                     --dtype='bfloat16' \
                     --compile=False \
                     --bias_update_interval=$bias_update_interval \
-                    --wandb_project=cccc_lr_7e-3 \
+                    --wandb_project=fineweb_lr_7e-3 \
                     --wandb_run_name=width${width}_e${num_exp}_a${num_act}_server_a \
-                    >> /home/ubuntu/MuP_MOE/std_out/debugged_outlog_cccc_${timestamp}
+                    >> /home/ubuntu/MuP_MOE/std_out/debugged_outlog_fineweb_${timestamp}
             done
         done
     done
