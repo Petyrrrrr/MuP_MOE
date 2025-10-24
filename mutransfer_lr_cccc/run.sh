@@ -2,29 +2,30 @@
 # muP hyperparameter transfer with MOE - Multi-GPU DDP version
 
 # Number of GPUs to use for DDP training
-NUM_GPUS=4
-
-# DDP launcher using torchrun
-export CUDA_VISIBLE_DEVICES=4,5,6,7
+NUM_GPUS=8
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 
 LAUNCHER="torchrun --standalone --nproc_per_node=$NUM_GPUS"
 
 timestamp=$(python -c "from datetime import datetime; print(datetime.now().strftime('%Y%m%d_%H%M%S'))")
-# Configuration parameters matching run-multi-gpu.py
+
 max_iters=5000
 warmup_iters=300
 router_lr_mult=0.5
 init_std=0.02
 moe_tau=0.02
 n_layer=14
-batch_size=20
-gradient_accumulation_steps=24
+
+total_batch_size=480
+gradient_accumulation_steps=8
+batch_size=60
+
 t_ema_inv=0.0
 bias_update_interval=1
 moe_bias_lr_mult=1.0
-for width in 512
+for width in 256
 do
-    for num_exp in 80
+    for num_exp in 24
     do
         for lr in 0.007
         do

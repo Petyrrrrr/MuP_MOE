@@ -7,7 +7,7 @@ tokens for one "global" batch (480 sequences of length 1024 plus the next-token 
 flat ``.bin`` file, allowing the training loop to rebuild input/target tensors without extra
 processing.
 
-/home/ubuntu/MuP_MOE/venv/bin/python split_cccc_batches.py --dataset-dir data/cccc --train-batches 10000 --val-batches 100 --overwrite --shuffle --shuffle-seed 42
+/home/ubuntu/MuP_MOE/venv/bin/python split_data_batches.py --dataset-dir data/fineweb --train-batches 10000 --val-batches 100 --overwrite --shuffle --shuffle-seed 42
 """
 from __future__ import annotations
 
