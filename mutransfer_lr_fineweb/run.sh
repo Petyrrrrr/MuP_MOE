@@ -39,7 +39,7 @@ do
                 num_act=$((num_exp/4))
                 weight_decay=0.0
                 moe_bias_lr=0.1
-                out_dir="run_data/mutransfer_lr_cccc/out_${timestamp}/width${width}_depth${n_layer}_experts${num_exp}_active${num_act}_seed${seed}_lr${lr}"
+                out_dir="run_data/mutransfer_lr_fineweb/out_${timestamp}/width${width}_depth${n_layer}_experts${num_exp}_active${num_act}_seed${seed}_lr${lr}"
 
                 $LAUNCHER train.py \
                     --out_dir=$out_dir \

@@ -163,11 +163,11 @@ data_dir = os.path.join('data', dataset)
 
 # Set up deterministic batch loader if split batches are available
 deterministic_loader = None
-if dataset == 'cccc':
+if dataset in ['cccc', 'fineweb']:
     split_dir = os.path.join(data_dir, 'split')
     if not os.path.isdir(split_dir):
         raise FileNotFoundError(
-            f"Expected deterministic batches in {split_dir}. Run split_cccc_batches.py first."
+            f"Expected deterministic batches in {split_dir}. Run split_data_batches.py first."
         )
     deterministic_loader = DeterministicBatchLoader(
         data_dir=data_dir,
