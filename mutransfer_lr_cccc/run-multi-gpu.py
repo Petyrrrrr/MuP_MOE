@@ -19,7 +19,7 @@ os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
 NUM_GPUS = 8
 VISIBLE_DEVICES = list(range(NUM_GPUS))
 assert len(VISIBLE_DEVICES) == NUM_GPUS
-WANDB_ENABLED = False
+WANDB_ENABLED = True
 
 def _load_env_file(env_path: Path) -> Dict[str, str]:
     """Parse simple KEY=VALUE lines from a .env style file."""
@@ -165,23 +165,27 @@ class MultiGPURunner:
     def generate_configurations(self) -> List[Dict]:
         """Generate all configurations to run."""
         configs = []
-        wid_exp = [(384, 64, 10)]
-        lrs = [0.004, 0.005, 0.006, 0.007, 0.008, 0.010, 0.012, 0.014]
+        wid_exp = [(256, 16, 160), (256, 32, 220), (256, 64, 350), (256, 96, 500)]
+        lrs = [0.004, 0.006, 0.008, 0.012, 0.016]
         seeds = [1]
         init_std = 0.02
         moe_tau = 0.02
         n_layer = 14
-        batch_size = 40
-        gradient_accumulation_steps = 12
+       # batch_size = 30
+        gradient_accumulation_steps_dict = {16: 10, 32: 10, 64: 16, 96: 20}
         t_ema_inv = 0.0
         bias_update_interval = 1
-        for it in range(1):
+        for lr in lrs:
             for width, num_exp, _ in wid_exp:
+                if (num_exp == 16 and lr < 0.015) or (num_exp == 32 and lr < 0.009):
+                    continue
+                else:
                     max_iters = 5000
                     warmup_iters = 300
-                    for lr in lrs:
-                        for seed in seeds:
+                    for seed in seeds:
                             weight_decay = t_ema_inv / (max_iters * lr)
+                            gradient_accumulation_steps = gradient_accumulation_steps_dict[num_exp]
+                            num_act = num_exp//4
                             config = {
                                 'width': width,
                                 'num_exp': num_exp,
@@ -192,7 +196,7 @@ class MultiGPURunner:
                                 'min_lr': lr,
                                 'mup_base_width': 256,
                                 'mup_width_multiplier': width / 256,
-                                'num_act': num_exp//4,
+                                'num_act': num_act,
                                 'n_layer': n_layer,
                                 'max_iters': max_iters,
                                 'warmup_iters': warmup_iters,  
@@ -201,12 +205,12 @@ class MultiGPURunner:
                                 'moe_tau' : moe_tau,
                                 'init_std' : init_std,
                                 'gradient_accumulation' : gradient_accumulation_steps,
-                                'batch_size' : batch_size,
+                                'batch_size' : int(480/gradient_accumulation_steps),
                                 'weight_decay' : weight_decay,
                                 'bias_update_interval' : bias_update_interval,
                                 'alpha' : 1.0,
-                                'run_name' : 'width${width}_e${num_exp}_a${num_act}',
-                                'project_name' : 'mutransfer_sweep'+self.timestamp,
+                                'run_name' : f'width{width}_e{num_exp}_a{num_act}_lr{lr}',
+                                'project_name' : 'mutransfer_sweep_w256_crashed',
                             }
                             configs.append(config)
         

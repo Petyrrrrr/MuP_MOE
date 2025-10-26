@@ -18,7 +18,7 @@ if [[ ! -d "$VENV" ]]; then
 fi
 source "$VENV/bin/activate"
 
-python "$DATA_DOWNLOAD" --big-dir "$BIG_DIR" --limit 10000000 --checkpoint-interval 2500000 "$@"
+python "$DATA_DOWNLOAD" --big-dir "$BIG_DIR" --limit 30000000 --checkpoint-interval 10000000 "$@"
 
 if [[ ! -f "$PICKLE_OUT" ]]; then
   echo "[error] Expected pickle at $PICKLE_OUT" >&2

@@ -39,7 +39,7 @@ do
                 num_act=$((num_exp/4))
                 weight_decay=0.0
                 moe_bias_lr=0.1
-                out_dir="run_data/mutransfer_lr_cccc/out_${timestamp}/width${width}_depth${n_layer}_experts${num_exp}_active${num_act}_seed${seed}_lr${lr}"
+                out_dir="run_data/mutransfer_lr_fineweb/out_${timestamp}/width${width}_depth${n_layer}_experts${num_exp}_active${num_act}_seed${seed}_lr${lr}"
 
                 $LAUNCHER train.py \
                     --out_dir=$out_dir \
@@ -51,7 +51,6 @@ do
                     --always_save_checkpoint=False \
                     --never_save_checkpoint=True \
                     --init_from='scratch' \
-                    --wandb_log=True \
                     --csv_log=True \
                     --warmup_iters=$warmup_iters \
                     --dataset='fineweb' \
@@ -93,6 +92,7 @@ do
                     --dtype='bfloat16' \
                     --compile=False \
                     --bias_update_interval=$bias_update_interval \
+                    --wandb_log=True \
                     --wandb_project=fineweb_lr_7e-3 \
                     --wandb_run_name=width${width}_e${num_exp}_a${num_act}_server_a \
                     >> /home/ubuntu/MuP_MOE/std_out/debugged_outlog_fineweb_${timestamp}
