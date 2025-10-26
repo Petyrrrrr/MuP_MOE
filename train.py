@@ -68,12 +68,16 @@ n_embd = 768
 dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
 bias = False # do we use bias inside LayerNorm and Linear layers?
 init_std = 0.02 # Initialization standard deviation for weights
+depth_alpha_enabled = True
+depth_multiplier = 1.0
+depth_alpha_exp = 1.0
 # adamw optimizer
 learning_rate = 6e-4 # max learning rate
 max_iters = 300 # total number of training iterations
 weight_decay = 1e-1
 beta1 = 0.9
 beta2 = 0.95
+adam_eps = 1e-10
 grad_clip = 1.0 # clip gradients at this value, or disable if == 0.0
 # learning rate decay settings
 decay_lr = True # whether to decay the learning rate
@@ -202,7 +206,8 @@ model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=bloc
                   mup_output_alpha=mup_output_alpha, num_exp=num_exp, num_act=num_act,
                   moe_tau=moe_tau, moe_bias_lr=moe_bias_lr, moe_bias_momentum=moe_bias_momentum,
                   moe_bias_momentum_enabled=moe_bias_momentum_enabled, moe_load_balance_method=moe_load_balance_method,
-                  moe_aux_loss_weight=moe_aux_loss_weight, alpha=alpha, max_iters=max_iters, bias_update_interval=bias_update_interval) # start with model_args from command line
+                  moe_aux_loss_weight=moe_aux_loss_weight, alpha=alpha, max_iters=max_iters, bias_update_interval=bias_update_interval,
+                  depth_alpha_enabled=depth_alpha_enabled, depth_multiplier=depth_multiplier, depth_alpha_exp=depth_alpha_exp) # start with model_args from command line
 
 if init_from == 'scratch':
     # init a new model from scratch
@@ -254,7 +259,7 @@ model.to(device)
 scaler = torch.amp.GradScaler('cuda', enabled=(dtype == 'float16'))
 
 # optimizer
-optimizer = model.configure_optimizers(weight_decay, learning_rate, (beta1, beta2), device_type)
+optimizer = model.configure_optimizers(weight_decay, learning_rate, (beta1, beta2), adam_eps, device_type)
 if init_from == 'resume':
     optimizer.load_state_dict(checkpoint['optimizer'])
 checkpoint = None # free up memory

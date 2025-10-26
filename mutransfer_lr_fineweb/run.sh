@@ -51,7 +51,6 @@ do
                     --always_save_checkpoint=False \
                     --never_save_checkpoint=True \
                     --init_from='scratch' \
-                    --wandb_log=True \
                     --csv_log=True \
                     --warmup_iters=$warmup_iters \
                     --dataset='fineweb' \
@@ -93,6 +92,10 @@ do
                     --dtype='bfloat16' \
                     --compile=False \
                     --bias_update_interval=$bias_update_interval \
+                    --depth_alpha_enabled=True \
+                    --depth_multiplier=7.0 \
+                    --depth_alpha_exp=1.0 \
+                    --wandb_log=False \
                     --wandb_project=fineweb_lr_7e-3 \
                     --wandb_run_name=width${width}_e${num_exp}_a${num_act}_server_a \
                     >> /home/ubuntu/MuP_MOE/std_out/debugged_outlog_fineweb_${timestamp}

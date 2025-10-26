@@ -287,6 +287,7 @@ class Block(nn.Module):
         self.ln_1 = LayerNorm(config.n_embd, bias=config.bias)
         self.attn = CausalSelfAttention(config)
         self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
+        self.residual_scaling = 1/(config.depth_multiplier ** config.depth_alpha_exp) if config.depth_alpha_enabled else 1.0
         if hasattr(config, 'num_exp') and config.num_exp > 1:
             self.mlp = MLP_MOE(config)
             self.use_moe = True
@@ -295,19 +296,14 @@ class Block(nn.Module):
             self.use_moe = False
 
     def forward(self, x):
-        x = x + self.attn(self.ln_1(x))
+        x = x + self.residual_scaling * self.attn(self.ln_1(x))
         if self.use_moe:
             mlp_result = self.mlp(self.ln_2(x))
-            if len(mlp_result) == 3:  # aux_loss method returns gate logits
-                mlp_out, mask, gate_logits = mlp_result
-                x = x + mlp_out
-                return x, mask, gate_logits
-            else:  # bias method
-                mlp_out, mask = mlp_result
-                x = x + mlp_out
-                return x, mask
+            mlp_out, mask = mlp_result
+            x = x + self.residual_scaling * mlp_out
+            return x, mask
         else:
-            x = x + self.mlp(self.ln_2(x))
+            x = x + self.residual_scaling * self.mlp(self.ln_2(x))
             return x
 
 @dataclass
@@ -326,6 +322,9 @@ class GPTConfig:
     mup_width_multiplier: float = 1 # `mup_width_multiplier = width / base_width` where base_width is typically 256
     mup_input_alpha: float = 1 # Optional tunable multiplier applied to input embedding forward pass output
     mup_output_alpha: float = 1 # Optional tunable multiplier applied to output unembedding forward pass output
+    depth_alpha_enabled: bool = False
+    depth_multiplier: float = 1.0 # depth_multiplier = depth / base_depth`
+    depth_alpha_exp: float = 1.0 # a float in the range [0.5, 1] that controls how residual branches are scaled as a function of depth. This results in residual connections of the type x = x + depth_multiplier**(-depth_alpha_exp) * branch(x) with LR correction eta *= depth_multiplier**(depth_alpha_exp-1)
     # MOE parameters
     num_exp: int = 1 # Number of experts (set to 1 to disable MOE)
     num_act: int = 1 # Number of active experts (top-k)
@@ -370,16 +369,14 @@ class GPT(nn.Module):
                 if pn.endswith('c_attn.weight') or pn.endswith('c_fc.weight'):
                     torch.nn.init.normal_(p, mean=0.0, std=config.init_std / math.sqrt(config.mup_width_multiplier))
                 elif pn.endswith('c_proj.weight'):
-                    torch.nn.init.normal_(p, mean=0.0, std=config.init_std / math.sqrt(2 * config.n_layer * config.mup_width_multiplier))
+                    torch.nn.init.normal_(p, mean=0.0, std=config.init_std / math.sqrt(config.mup_width_multiplier))
                 elif pn.endswith('router.weight'):
-                    # Router initialization
                     torch.nn.init.normal_(p, mean=0.0, std=config.init_std)
                 ### End muP code ###
             elif pn.endswith('c_proj.weight'):
                 # Handle both regular MLP and MOE experts for non-muP
                 torch.nn.init.normal_(p, mean=0.0, std=config.init_std / math.sqrt(2 * config.n_layer))
             elif pn.endswith('router.weight'):
-                # Router initialization for non-muP
                 torch.nn.init.normal_(p, mean=0.0, std=config.init_std)
 
         # report number of parameters
@@ -539,16 +536,16 @@ class GPT(nn.Module):
 
         return model
 
-    def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
+    def configure_optimizers(self, weight_decay, learning_rate, betas, adam_eps, device_type):
         # start with all of the candidate parameters
         param_dict = {pn: p for pn, p in self.named_parameters()}
         # filter out those that do not require grad
         param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
-        
+
         # Collect MOE router parameters separately
         router_params = {}
         router_biases = {}
-        
+
         # Identify MOE blocks and compute tokens per expert
         for i, block in enumerate(self.transformer.h):
             if hasattr(block, 'use_moe') and block.use_moe:
@@ -559,16 +556,18 @@ class GPT(nn.Module):
                     router_params[router_name] = param_dict[router_name]
                 if bias_name in param_dict:
                     router_biases[bias_name] = param_dict[bias_name]
-        
+
         # create optim groups. Any parameters that is 2D will be weight decayed, otherwise no.
         # i.e. all weight tensors in matmuls + embeddings decay, all biases and layernorms don't.
         if self.config.mup_enabled and not self.config.mup_disable_hidden_lr_scaling:
             ### Begin muP code ###
-            mup_decay_params = []
-            decay_params = []
-            nodecay_params = []
+            emb_params = []
+            hidden_ln_params = []
+            hidden_weight_params = []
+            hidden_bias_params = []
+            final_ln_params = []
             router_param_list = []
-            
+
             for n, p in param_dict.items():
                 if n in router_params:
                     # Router parameters get special treatment
@@ -576,43 +575,75 @@ class GPT(nn.Module):
                 elif n in router_biases:
                     # Router biases: include in optimizer for aux_loss, exclude for bias method
                     if self.config.moe_load_balance_method == "aux_loss":
-                        nodecay_params.append(p)  # Router bias is a bias parameter (no weight decay)
+                        hidden_bias_params.append(p)  # Router bias is a bias parameter (no weight decay)
                     else:
                         continue  # Skip router biases for bias method (updated manually)
-                elif p.dim() >= 2:
-                    
-                    if n.endswith('c_attn.weight') or n.endswith('c_fc.weight') or n.endswith('c_proj.weight'):
-                        mup_decay_params.append(p)
-                    else:
-                        decay_params.append(p)
+                elif n in ('transformer.wte.weight', 'transformer.wpe.weight'):
+                    emb_params.append(p)
+                elif '.ln_' in n and not '.ln_f.' in n:
+                    hidden_ln_params.append(p)
+                elif n.endswith('c_attn.weight') or n.endswith('c_fc.weight') or n.endswith('c_proj.weight'):
+                    hidden_weight_params.append(p)
+                elif n.endswith('c_attn.bias') or n.endswith('c_fc.bias') or n.endswith('c_proj.bias'):
+                    hidden_bias_params.append(p)
+                elif '.ln_f.' in n:
+                    final_ln_params.append(p)
                 else:
-                    nodecay_params.append(p)
-            
+                    raise Exception(f'Unhandled parameter {n}')
+
+            width_lr_scaling = (1 / self.config.mup_width_multiplier)
+            depth_lr_scaling = (self.config.depth_multiplier ** (self.config.depth_alpha_exp - 1))
+            adam_eps *= (1 / self.config.mup_width_multiplier) * (self.config.depth_multiplier ** (-1 * self.config.depth_alpha_exp))
             optim_groups = [
-                {'params': mup_decay_params, 'weight_decay': weight_decay, 'lr_scale': 1/self.config.mup_width_multiplier},
-                {'params': decay_params, 'weight_decay': weight_decay, 'lr_scale': 1},
-                {'params': nodecay_params, 'weight_decay': 0.0, 'lr_scale': 1}
+                {
+                    'params': emb_params,
+                    'weight_decay': weight_decay,
+                    'lr_scale': 1.0,
+                },
+                {
+                    'params': hidden_ln_params,
+                    'weight_decay': 0.0,
+                    'lr_scale': depth_lr_scaling,
+                },
+                {
+                    'params': hidden_weight_params,
+                    'weight_decay': weight_decay / width_lr_scaling,
+                    'lr_scale': width_lr_scaling * depth_lr_scaling
+                },
+                {
+                    'params': hidden_bias_params,
+                    'weight_decay': 0.0,
+                    'lr_scale': 1.0,
+                },
+                {
+                    'params': final_ln_params,
+                    'weight_decay': 0.0,
+                    'lr_scale': 1.0,
+                },
             ]
-            
-            # Add router parameter groups with dynamic learning rates
-            # These will be computed dynamically in the training loop based on tokens per expert
             for router_name, router_param in router_param_list:
                 layer_idx = int(router_name.split('.')[2])  # Extract layer index
-                optim_groups.append({
-                    'params': [router_param],
-                    'weight_decay': weight_decay,
-                    'lr_scale': 1 / math.sqrt(self.config.mup_width_multiplier),
-                    'is_router': True,
-                    'layer_idx': layer_idx
-                })
-            
-            num_mup_decay_params = sum(p.numel() for p in mup_decay_params)
-            num_decay_params = sum(p.numel() for p in decay_params)
-            num_nodecay_params = sum(p.numel() for p in nodecay_params)
+                optim_groups.append(
+                    {
+                        'params': [router_param],
+                        'weight_decay': weight_decay,
+                        'lr_scale': 1 / math.sqrt(self.config.mup_width_multiplier),
+                        'is_router': True,
+                        'layer_idx': layer_idx
+                    }
+                )
+
+            num_emb_params = sum(p.numel() for p in emb_params)
+            num_hidden_ln_params = sum(p.numel() for p in hidden_ln_params)
+            num_hidden_weight_params = sum(p.numel() for p in hidden_weight_params)
+            num_hidden_bias_params = sum(p.numel() for p in hidden_bias_params)
+            num_final_ln_params = sum(p.numel() for p in final_ln_params)
             num_router_params = sum(p.numel() for n, p in router_param_list)
-            print(f"num mup decayed parameter tensors: {len(mup_decay_params)}, with {num_mup_decay_params:,} parameters")
-            print(f"num decayed parameter tensors: {len(decay_params)}, with {num_decay_params:,} parameters")
-            print(f"num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay_params:,} parameters")
+            print(f"num embedding parameter tensors: {len(emb_params)}, with {num_emb_params:,} parameters")
+            print(f"num hidden layernorm parameter tensors: {len(hidden_ln_params)}, with {num_hidden_ln_params:,} parameters")
+            print(f"num hidden weight parameter tensors: {len(hidden_weight_params)}, with {num_hidden_weight_params:,} parameters")
+            print(f"num hidden bias parameter tensors: {len(hidden_bias_params)}, with {num_hidden_bias_params:,} parameters")
+            print(f"num final layernorm parameter tensors: {len(final_ln_params)}, with {num_final_ln_params:,} parameters")
             print(f"num router parameter tensors: {len(router_param_list)}, with {num_router_params:,} parameters")
             ### End muP code ###
         else:
@@ -620,7 +651,7 @@ class GPT(nn.Module):
             decay_params = []
             nodecay_params = []
             router_param_list = []
-            
+
             for n, p in param_dict.items():
                 if n in router_params:
                     router_param_list.append((n, p))
@@ -634,12 +665,12 @@ class GPT(nn.Module):
                     decay_params.append(p)
                 else:
                     nodecay_params.append(p)
-                    
+
             optim_groups = [
                 {'params': decay_params, 'weight_decay': weight_decay},
                 {'params': nodecay_params, 'weight_decay': 0.0}
             ]
-            
+
             # Add router parameter groups
             for router_name, router_param in router_param_list:
                 layer_idx = int(router_name.split('.')[2])
@@ -650,19 +681,19 @@ class GPT(nn.Module):
                     'is_router': True,
                     'layer_idx': layer_idx
                 })
-            
+
             num_decay_params = sum(p.numel() for p in decay_params)
             num_nodecay_params = sum(p.numel() for p in nodecay_params)
             num_router_params = sum(p.numel() for n, p in router_param_list)
             print(f"num decayed parameter tensors: {len(decay_params)}, with {num_decay_params:,} parameters")
             print(f"num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay_params:,} parameters")
             print(f"num router parameter tensors: {len(router_param_list)}, with {num_router_params:,} parameters")
-            
+
         # Create AdamW optimizer and use the fused version if it is available
         fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters
         use_fused = fused_available and device_type == 'cuda'
         extra_args = dict(fused=True) if use_fused else dict()
-        optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas, **extra_args)
+        optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas, eps=adam_eps, **extra_args)
         print(f"using fused AdamW: {use_fused}")
 
         return optimizer

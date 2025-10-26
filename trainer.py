@@ -61,12 +61,13 @@ class Trainer:
         self.learning_rate = config['learning_rate']
         self.dtype = config['dtype']
         self.compile = config['compile']
+        self.adam_eps = config['adam_eps']
         self.mup_enabled = config['mup_enabled']
         self.mup_enable_coord_check_logging = config['mup_enable_coord_check_logging']
         self.moe_load_balance_method = config['moe_load_balance_method']
         self.moe_bias_lr = config['moe_bias_lr']
         self.moe_bias_momentum_enabled = config['moe_bias_momentum_enabled']
-        self.router_lr_mult = config.get('router_lr_mult', 1.0)  # Default to 1.0 if not specified
+        self.router_lr_mult = config.get('router_lr_mult')  # Default to 1.0 if not specified
         self.skip_val_loss = config['skip_val_loss']
         self.max_nan_losses = config.get('max_nan_losses', 50)  # Default to 50 if not specified
         self.bias_update_interval = config.get('bias_update_interval')

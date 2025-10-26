@@ -165,17 +165,15 @@ class MultiGPURunner:
     def generate_configurations(self) -> List[Dict]:
         """Generate all configurations to run."""
         configs = []
-        wid_exp = [(512, 16, 160), (512, 32, 220), (512, 64, 350),]
+        wid_exp = [(512, 16, 16), (512, 32, 12), (512, 64, 8),]
         lrs = [0.004, 0.006, 0.008, 0.012, 0.016]
         seeds = [1]
         init_std = 0.02
         moe_tau = 0.02
-        n_layer = 14
-       # batch_size = 30
-        gradient_accumulation_steps_dict = {16: 10, 32: 10, 64: 16, 96: 20}
+        gradient_accumulation_steps_dict = {16: 10, 32: 8, 64: 15}
         t_ema_inv = 0.0
         bias_update_interval = 1
-        for width, num_exp, _ in wid_exp:
+        for width, num_exp, n_layer in wid_exp:
             for lr in lrs:        
                     max_iters = 5000
                     warmup_iters = 300
@@ -206,8 +204,11 @@ class MultiGPURunner:
                                 'weight_decay' : weight_decay,
                                 'bias_update_interval' : bias_update_interval,
                                 'alpha' : 1.0,
-                                'run_name' : f'width{width}_e{num_exp}_a{num_act}_lr{lr}',
-                                'project_name' : 'mutransfer_sweep_w512_lr'+self.timestamp,
+                                'depth_alpha_enabled' : True,
+                                'depth_multiplier' : n_layer / 2,
+                                'depth_alpha_exp' : 1.0,
+                                'run_name' : f'width{width}_e{num_exp}_a{num_act}_lr{lr}_depth{n_layer}',
+                                'project_name' : 'fineweb_completeP_sweep_w512_lr',
                             }
                             configs.append(config)
         
@@ -274,7 +275,10 @@ class MultiGPURunner:
             f"--alpha={config['alpha']}",
             "--dtype=bfloat16",
             "--compile=False",
-            f"--bias_update_interval={config['bias_update_interval']}"
+            f"--bias_update_interval={config['bias_update_interval']}",
+            f"--depth_alpha_enabled={config['depth_alpha_enabled']}",
+            f"--depth_multiplier={config['depth_multiplier']}",
+            f"--depth_alpha_exp={config['depth_alpha_exp']}",
         ]
 
         wandb_run_name: Optional[str] = None
