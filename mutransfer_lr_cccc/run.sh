@@ -3,7 +3,8 @@
 
 # Number of GPUs to use for DDP training
 NUM_GPUS=4
-export CUDA_VISIBLE_DEVICES=0,1,2,3
+export CUDA_VISIBLE_DEVICES=4,5,6,7
+
 LAUNCHER="torchrun --standalone --nproc_per_node=$NUM_GPUS"
 
 timestamp=$(python -c "from datetime import datetime; print(datetime.now().strftime('%Y%m%d_%H%M%S'))")
@@ -13,20 +14,20 @@ warmup_iters=300
 router_lr_mult=0.5
 init_std=0.02
 moe_tau=0.02
-n_layer=14
+n_layer=8
 
 total_batch_size=480
-gradient_accumulation_steps=12
-batch_size=40
+gradient_accumulation_steps=8
+batch_size=60
 
 t_ema_inv=0.0
 bias_update_interval=1
 moe_bias_lr_mult=1.0
 for width in 512
 do
-    for num_exp in 16
+    for num_exp in 24
     do
-        for lr in 0.007
+        for lr in 0.016
         do
             for seed in 1
             do
@@ -34,6 +35,8 @@ do
                 n_heads=$((width / head_size))
                 min_lr=$lr
                 mup_base_width=256
+                completep_base_depth=2
+                completep_depth_multiplier=$(echo "scale=8; $n_layer/$completep_base_depth" | bc -l)
                 mup_width_multiplier=$(echo "scale=8; $width/$mup_base_width" | bc -l)
                 num_act=$((num_exp/4))
                 weight_decay=0.0
@@ -50,7 +53,6 @@ do
                     --always_save_checkpoint=False \
                     --never_save_checkpoint=True \
                     --init_from='scratch' \
-                    --wandb_log=False \
                     --csv_log=True \
                     --warmup_iters=$warmup_iters \
                     --dataset='cccc' \
@@ -92,8 +94,12 @@ do
                     --dtype='bfloat16' \
                     --compile=False \
                     --bias_update_interval=$bias_update_interval \
-                    --wandb_project=cccc_lr_7e-3 \
-                    --wandb_run_name=width${width}_e${num_exp}_a${num_act}_server_a \
+                    --depth_alpha_enabled=True \
+                    --depth_multiplier=$completep_depth_multiplier \
+                    --depth_alpha_exp=1.0 \
+                    --wandb_log=True \
+                    --wandb_project=cccc_depth_debug \
+                    --wandb_run_name=width${width}_e${num_exp}_a${num_act}_mg \
                     >> /home/ubuntu/MuP_MOE/std_out/debugged_outlog_cccc_${timestamp}
             done
         done
