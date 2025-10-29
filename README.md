@@ -48,6 +48,16 @@ Here, s_func is the expert weights, and h_func is used for load balancing. There
 
 By default, h is sigmoid (so biases don't need to overflow) and s is softmax (which is equivalent to exp for this purpose).
 
+========NUMBER OF PARAMETERS=======
+
+On a first order, we have:
+
+total_params = n_layer × n_embd^2 × (4 + 2 × alpha × n_exp) + (50,000 (n_vocab) + 1024 (block size)) × n_embd
+
+and:
+
+activated_params = n_layer × n_embd^2 × (4 + 2 × alpha × n_act) + (50,000 (n_vocab) + 1024 (block size)) × n_embd
+
 ========COMMENTS========
 
 These claims are pretty non-rigorous, and I'm not sure how tested/statistically significant these are.

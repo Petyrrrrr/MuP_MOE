@@ -112,6 +112,11 @@ def main() -> None:
 
     print("Total initialized parameters:", fmt(float(total_params)))
     print("Approximate active parameters:", fmt(active_params))
+    print("--------------------------------")
+    heuristic_total_params = args.n_layer * args.n_embd**2 * (4 + 2 * args.alpha * args.n_exp) + 51350 * args.n_embd
+    heuristic_active_params = args.n_layer * args.n_embd**2 * (4 + 2 * args.alpha * args.n_act) + 51350 * args.n_embd
+    print("Heuristic total parameters:", fmt(heuristic_total_params))
+    print("Heuristic active parameters:", fmt(heuristic_active_params))
 
 
 if __name__ == "__main__":
