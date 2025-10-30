@@ -2,16 +2,16 @@
 # muP hyperparameter transfer with MOE - Multi-GPU DDP version
 
 # Number of GPUs to use for DDP training
-NUM_GPUS=4
-export CUDA_VISIBLE_DEVICES=0,1,2,3
-
+NUM_GPUS=8
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 LAUNCHER="torchrun --standalone --nproc_per_node=$NUM_GPUS"
 
 timestamp=$(python -c "from datetime import datetime; print(datetime.now().strftime('%Y%m%d_%H%M%S'))")
 
-max_iters=5000
-warmup_iters=300
+max_iters=1000
+warmup_iters=250
 router_lr_mult=0.5
+
 init_std=0.02
 moe_tau=0.02
 n_layer=8
@@ -25,9 +25,9 @@ bias_update_interval=1
 moe_bias_lr_mult=1.0
 for width in 512
 do
-    for num_exp in 24
+    for num_exp in 16
     do
-        for lr in 0.016
+        for lr in 0.0005 0.001 0.002 0.004 0.008 0.016 0.032
         do
             for seed in 1
             do
@@ -35,11 +35,12 @@ do
                 n_heads=$((width / head_size))
                 min_lr=$lr
                 mup_base_width=256
-                completep_base_depth=2
+                completep_base_depth=8
                 completep_depth_multiplier=$(echo "scale=8; $n_layer/$completep_base_depth" | bc -l)
                 mup_width_multiplier=$(echo "scale=8; $width/$mup_base_width" | bc -l)
                 num_act=$((num_exp/4))
-                weight_decay=0.0
+                t_ema_inv=1.0
+                weight_decay=$(echo "scale=8; $t_ema_inv/($max_iters*$lr)" | bc -l)
                 moe_bias_lr=0.1
                 out_dir="run_data/mutransfer_lr_fineweb/out_${timestamp}/width${width}_depth${n_layer}_experts${num_exp}_active${num_act}_seed${seed}_lr${lr}"
 
@@ -98,8 +99,8 @@ do
                     --depth_multiplier=$completep_depth_multiplier \
                     --depth_alpha_exp=1.0 \
                     --wandb_log=True \
-                    --wandb_project=fineweb_depth_debug \
-                    --wandb_run_name=width${width}_e${num_exp}_a${num_act}_mg \
+                    --wandb_project=fineweb_depth_proxy_lr_sweep_deeper \
+                    --wandb_run_name=width${width}_e${num_exp}_a${num_act}_mg_lr${lr} \
                     >> /home/ubuntu/MuP_MOE/std_out/debugged_outlog_fineweb_${timestamp}
             done
         done

@@ -142,13 +142,14 @@ class MLP(nn.Module):
         self.gelu    = nn.GELU()
         self.c_proj  = nn.Linear(hidden_size, config.n_embd, bias=config.bias)
         self.dropout = nn.Dropout(config.dropout)
+        self.alpha = config.alpha
 
     def forward(self, x):
         x = self.c_fc(x)
         x = self.gelu(x)
         x = self.c_proj(x)
         x = self.dropout(x)
-        return x
+        return x / self.alpha
 
 class MLP_MOE(nn.Module):
     def __init__(self, config):

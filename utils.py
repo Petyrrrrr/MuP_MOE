@@ -7,10 +7,12 @@ import torch
 import numpy as np
 
 def bias_mult(it, max_iters):
-    if it < max_iters * 0.06:
+    max_iter = 5 * max_iters
+    warmup_iter = max_iter * 0.05
+    if it < warmup_iter:
         return 1.0
     else:
-        return 0.5 * (1.0 + math.cos(math.pi * (it - max_iters * 0.06) / (0.94 *  max_iters)))
+        return 0.5 * (1.0 + math.cos(math.pi * (it - warmup_iter) / (max_iter - warmup_iter)))
 
 def router_mult(iter_num, max_iters):
     return 1.0
@@ -271,7 +273,13 @@ def estimate_loss(model, eval_iters, skip_val_loss, get_batch_fn, ctx, collect_m
     return out
 
 def get_lr(it, learning_rate, warmup_iters, lr_decay_iters, max_iters, min_lr, decay_lr = False):
-    if it <= warmup_iters:
-        return learning_rate * it / warmup_iters
+    max_iter = 5 * max_iters
+    warmup_iter = max_iter * 0.05
+    if it < warmup_iter:
+        return 1.0
     else:
-        return learning_rate * 0.5 * (1.0 + math.cos(math.pi * (it - warmup_iters) / (max_iters - warmup_iters)))
+        return 0.5 * (1.0 + math.cos(math.pi * (it - warmup_iter) / (max_iter - warmup_iter)))
+    # if it <= warmup_iters:
+    #     return learning_rate * it / warmup_iters
+    # else:
+    #     return learning_rate * 0.5 * (1.0 + math.cos(math.pi * (it - warmup_iters) / (max_iters - warmup_iters)))

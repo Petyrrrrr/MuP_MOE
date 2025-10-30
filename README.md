@@ -48,6 +48,20 @@ Here, s_func is the expert weights, and h_func is used for load balancing. There
 
 By default, h is sigmoid (so biases don't need to overflow) and s is softmax (which is equivalent to exp for this purpose).
 
+
+====Counting parameters====
+
+Each transformer block contributes 4 * n_embd^2 parameters from the attention projections (c_attn + c_proj) regardless of head count because both matrices are n_embd × (3·n_embd) and n_embd × n_embd respectively. The feed-forward hidden width is hidden_size = int(alpha * n_embd) (model.py:140), so every MLP instance adds about 2 * alpha * n_embd^2 weights. In MoE mode, there are num_exp copies of this MLP per block, so the expert-side contribution is 2 * alpha * num_exp * n_embd^2 per block.
+
+Putting those together gives a first-order total-parameter heuristic
+
+P_total ≈ n_layer * (4 + 2 * alpha * num_exp) * n_embd^2 + n_embd * vocab_size + O(n_layer * n_embd * num_exp)
+
+count_parameters.py splits parameters into “expert” vs “non-expert” by summing over the expert modules only , then defines “active” parameters as non_expert + (num_act / num_exp) * expert_params (count_parameters.py:102-108). Using the same leading-order logic, the activated expert weight per block is 2 * alpha * num_act * n_embd^2, so
+    
+P_active ≈ n_layer * (4 + 2 * alpha * num_act) * n_embd^2 + n_embd * (vocab_size + block_size) + O(n_layer * n_embd * num_exp)
+    
+
 ========COMMENTS========
 
 These claims are pretty non-rigorous, and I'm not sure how tested/statistically significant these are.
