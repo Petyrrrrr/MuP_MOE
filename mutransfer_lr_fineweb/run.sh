@@ -4,6 +4,12 @@
 # Number of GPUs to use for DDP training
 NUM_GPUS=8
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+
+# Enable deterministic behavior
+export CUBLAS_WORKSPACE_CONFIG=:4096:8
+export CUDNN_DETERMINISTIC=1
+export CUDNN_BENCHMARK=0
+
 LAUNCHER="torchrun --standalone --nproc_per_node=$NUM_GPUS"
 
 timestamp=$(python -c "from datetime import datetime; print(datetime.now().strftime('%Y%m%d_%H%M%S'))")
@@ -17,17 +23,17 @@ moe_tau=0.02
 n_layer=8
 
 total_batch_size=480
-gradient_accumulation_steps=8
-batch_size=60
+gradient_accumulation_steps=16
+batch_size=30
 
 t_ema_inv=0.0
 bias_update_interval=1
 moe_bias_lr_mult=1.0
-for width in 512
+for width in 1024
 do
     for num_exp in 16
     do
-        for lr in 0.0005 0.001 0.002 0.004 0.008 0.016 0.032
+        for lr in 0.004 0.006 0.008
         do
             for seed in 1
             do

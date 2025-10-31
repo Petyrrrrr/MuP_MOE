@@ -155,6 +155,12 @@ random.seed(seed + seed_offset)
 np.random.seed(seed + seed_offset)
 torch.manual_seed(seed + seed_offset)
 torch.cuda.manual_seed_all(seed + seed_offset)
+
+# Enable deterministic algorithms for reproducibility
+torch.use_deterministic_algorithms(True)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
+
 torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
 torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
 device_type = 'cuda' if 'cuda' in device else 'cpu' # for later use in torch.autocast
