@@ -180,20 +180,20 @@ class MLP_MOE(nn.Module):
         return torch.sigmoid(x).to(x.dtype)
     
     def s_func(self, x):
-        return F.softmax(x, dim=-1).to(x.dtype)
+        return torch.sigmoid(x).to(x.dtype)
     
     def forward(self, x):
         B, T, C = x.shape
         x_flat = x.view(-1, C)  # (B*T, C)
         x_flat = x_flat.to(self.dtype)
         # Router forward pass
-        logit = self.router(x_flat) / math.sqrt(C)
+        logit = self.router(x_flat)
         score = self.s_func(logit / self.tau)  # (B*T, n_exp)
         mu_add_bias = self.h_func(logit / self.tau) + self.bias + (1e-9 * torch.randn_like(score) if self.training else score.new_zeros((B*T, self.n_exp)))  # (B*T, n_exp)        
         _, topk_indices = mu_add_bias.topk(self.num_act, dim=-1)  # (B*T, num_act)
 
         selected = score.gather(-1, topk_indices).to(score.dtype)  # (B*T, num_act)
-        selected = selected / (selected.sum(-1, keepdim=True) + 1e-9).to(score.dtype) #normalize experts
+        selected = (selected / self.n_exp).to(score.dtype) #normalize experts
 
         score = torch.zeros_like(score).scatter(1, topk_indices, selected)
         mask  = torch.zeros_like(score).scatter(1, topk_indices, 1.0)
@@ -326,6 +326,8 @@ class GPTConfig:
     depth_alpha_enabled: bool = False
     depth_multiplier: float = 1.0 # depth_multiplier = depth / base_depth`
     depth_alpha_exp: float = 1.0 # a float in the range [0.5, 1] that controls how residual branches are scaled as a function of depth. This results in residual connections of the type x = x + depth_multiplier**(-depth_alpha_exp) * branch(x) with LR correction eta *= depth_multiplier**(depth_alpha_exp-1)
+    expert_gamma: float = 1.0
+    router_lr_mult: float = 1.0
     # MOE parameters
     num_exp: int = 1 # Number of experts (set to 1 to disable MOE)
     num_act: int = 1 # Number of active experts (top-k)
@@ -345,7 +347,10 @@ class GPT(nn.Module):
         assert config.vocab_size is not None
         assert config.block_size is not None
         self.config = config
-
+        ### Expert Gamma Scaling ###
+        self.gamma = config.expert_gamma
+        self.router_lr_mult = config.router_lr_mult
+        # print(f"Expert gamma: {self.gamma}, Router LR mult: {self.router_lr_mult}")
         self.transformer = nn.ModuleDict(dict(
             wte = nn.Embedding(config.vocab_size, config.n_embd),
             wpe = nn.Embedding(config.block_size, config.n_embd),
@@ -372,7 +377,7 @@ class GPT(nn.Module):
                 elif pn.endswith('c_proj.weight'):
                     torch.nn.init.normal_(p, mean=0.0, std=config.init_std / math.sqrt(config.mup_width_multiplier))
                 elif pn.endswith('router.weight'):
-                    torch.nn.init.normal_(p, mean=0.0, std=config.init_std)
+                    torch.nn.init.normal_(p, mean=0.0, std=config.init_std / (config.mup_width_multiplier**self.gamma))
                 ### End muP code ###
             elif pn.endswith('c_proj.weight'):
                 # Handle both regular MLP and MOE experts for non-muP
@@ -627,8 +632,8 @@ class GPT(nn.Module):
                 optim_groups.append(
                     {
                         'params': [router_param],
-                        'weight_decay': weight_decay,
-                        'lr_scale': 1 / math.sqrt(self.config.mup_width_multiplier),
+                        'weight_decay': weight_decay / width_lr_scaling,
+                        'lr_scale': width_lr_scaling * self.router_lr_mult,
                         'is_router': True,
                         'layer_idx': layer_idx
                     }

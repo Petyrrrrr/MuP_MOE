@@ -427,10 +427,7 @@ class Trainer:
             
             lr = get_lr_fn(iter_num)
             for param_group in self.optimizer.param_groups:
-                if param_group.get('is_router', False):
-                    param_group['lr'] = self.router_lr_mult * lr * param_group.get('lr_scale', 1.0) * router_mult(iter_num, self.max_iters)
-                else:
-                    param_group['lr'] = lr * param_group.get('lr_scale', 1.0)
+                param_group['lr'] = lr * param_group.get('lr_scale', 1.0)
             
             # evaluate the loss on train/val sets and write checkpoints
             # if iter_num % self.eval_interval == 0 and self.master_process:

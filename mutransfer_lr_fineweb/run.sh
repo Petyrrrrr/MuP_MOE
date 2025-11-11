@@ -14,31 +14,32 @@ LAUNCHER="torchrun --standalone --nproc_per_node=$NUM_GPUS"
 
 timestamp=$(python -c "from datetime import datetime; print(datetime.now().strftime('%Y%m%d_%H%M%S'))")
 
-max_iters=1000
+max_iters=2000
 warmup_iters=250
-router_lr_mult=0.5
+
 
 init_std=0.02
-moe_tau=0.02
+moe_tau=1.0
 n_layer=8
 
 total_batch_size=480
-gradient_accumulation_steps=16
-batch_size=30
-
+gradient_accumulation_steps=8
+batch_size=60
+seed=1
 t_ema_inv=0.0
 bias_update_interval=1
 moe_bias_lr_mult=1.0
-for width in 1024
+for width in 512 768 1024
 do
     for num_exp in 16
     do
-        for lr in 0.004 0.006 0.008
+        for lr in 0.002 0.004 0.008 0.016 0.032 0.064 
         do
-            for seed in 1
+            for router_lr in 0.005
             do
                 head_size=64
                 n_heads=$((width / head_size))
+                expert_gamma=1.0
                 min_lr=$lr
                 mup_base_width=256
                 completep_base_depth=8
@@ -46,8 +47,9 @@ do
                 mup_width_multiplier=$(echo "scale=8; $width/$mup_base_width" | bc -l)
                 num_act=$((num_exp/4))
                 t_ema_inv=1.0
+                router_lr_mult=$(echo "scale=8; $router_lr/$lr" | bc -l)
                 weight_decay=$(echo "scale=8; $t_ema_inv/($max_iters*$lr)" | bc -l)
-                moe_bias_lr=0.1
+                moe_bias_lr=$lr
                 out_dir="run_data/mutransfer_lr_fineweb/out_${timestamp}/width${width}_depth${n_layer}_experts${num_exp}_active${num_act}_seed${seed}_lr${lr}"
 
                 $LAUNCHER train.py \
@@ -91,7 +93,7 @@ do
                     --moe_bias_lr=$moe_bias_lr \
                     --moe_bias_momentum=0.8 \
                     --router_lr_mult=$router_lr_mult \
-                    --moe_bias_momentum_enabled=True \
+                    --moe_bias_momentum_enabled=False \
                     --moe_load_balance_method='bias' \
                     --moe_aux_loss_weight=1.0 \
                     --seed=$seed \
@@ -105,7 +107,8 @@ do
                     --depth_multiplier=$completep_depth_multiplier \
                     --depth_alpha_exp=1.0 \
                     --wandb_log=True \
-                    --wandb_project=fineweb_depth_proxy_lr_sweep_deeper \
+                    --expert_gamma=$expert_gamma \
+                    --wandb_project=CompleteP_1-e_cleaned_sweep \
                     --wandb_run_name=width${width}_e${num_exp}_a${num_act}_mg_lr${lr} \
                     >> /home/ubuntu/MuP_MOE/std_out/debugged_outlog_fineweb_${timestamp}
             done
