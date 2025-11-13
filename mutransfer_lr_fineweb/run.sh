@@ -11,63 +11,52 @@ export CUDNN_DETERMINISTIC=1
 export CUDNN_BENCHMARK=0
 
 LAUNCHER="torchrun --standalone --nproc_per_node=$NUM_GPUS"
-
 timestamp=$(python -c "from datetime import datetime; print(datetime.now().strftime('%Y%m%d_%H%M%S'))")
 
 max_iters=2000
 warmup_iters=250
-
-
-init_std=0.02
-moe_tau=1.0
-n_layer=8
-
+head_size=64
 total_batch_size=480
 gradient_accumulation_steps=8
 batch_size=60
 seed=1
-t_ema_inv=0.0
-bias_update_interval=1
-moe_bias_lr_mult=1.0
-for width in 512 768 1024
+
+init_std=0.02
+moe_tau=1.0
+t_ema_inv=1.0
+lr=0.064
+router_lr=0.005
+attn_lr_mult=2.0
+n_layer=8
+for width in 256
 do
     for num_exp in 16
     do
-        for lr in 0.002 0.004 0.008 0.016 0.032 0.064 
+        for moe_tau in 1.0
         do
-            for router_lr in 0.005
-            do
-                head_size=64
-                n_heads=$((width / head_size))
+                moe_bias_lr=0.1
                 expert_gamma=1.0
-                min_lr=$lr
+                ffn_alpha=1.0
+                depth_alpha_exp=1.0
+                n_heads=$((width / head_size))
+                num_act=$((num_exp/4))
+
                 mup_base_width=256
                 completep_base_depth=8
                 completep_depth_multiplier=$(echo "scale=8; $n_layer/$completep_base_depth" | bc -l)
                 mup_width_multiplier=$(echo "scale=8; $width/$mup_base_width" | bc -l)
-                num_act=$((num_exp/4))
-                t_ema_inv=1.0
                 router_lr_mult=$(echo "scale=8; $router_lr/$lr" | bc -l)
                 weight_decay=$(echo "scale=8; $t_ema_inv/($max_iters*$lr)" | bc -l)
-                moe_bias_lr=$lr
+                
                 out_dir="run_data/mutransfer_lr_fineweb/out_${timestamp}/width${width}_depth${n_layer}_experts${num_exp}_active${num_act}_seed${seed}_lr${lr}"
-
                 $LAUNCHER train.py \
                     --out_dir=$out_dir \
-                    --eval_interval=1 \
-                    --log_interval=1 \
                     --eval_iters=$((100 * gradient_accumulation_steps / NUM_GPUS)) \
-                    --eval_only=False \
-                    --skip_val_loss=True \
-                    --always_save_checkpoint=False \
-                    --never_save_checkpoint=True \
-                    --init_from='scratch' \
                     --csv_log=True \
                     --warmup_iters=$warmup_iters \
                     --dataset='fineweb' \
                     --gradient_accumulation_steps=$gradient_accumulation_steps \
                     --batch_size=$batch_size \
-                    --block_size=1024 \
                     --n_layer=$n_layer \
                     --n_head=$n_heads \
                     --n_embd=$width \
@@ -75,14 +64,8 @@ do
                     --bias=False \
                     --init_std=$init_std \
                     --learning_rate=$lr \
-                    --lr_decay_iters=2000 \
-                    --min_lr=$min_lr \
                     --max_iters=$max_iters \
                     --weight_decay=$weight_decay \
-                    --beta1=0.9 \
-                    --beta2=0.95 \
-                    --grad_clip=3.0 \
-                    --decay_lr=True \
                     --mup_enabled=True \
                     --mup_width_multiplier=$mup_width_multiplier \
                     --mup_input_alpha=1.0 \
@@ -91,25 +74,18 @@ do
                     --num_act=$num_act \
                     --moe_tau=$moe_tau \
                     --moe_bias_lr=$moe_bias_lr \
-                    --moe_bias_momentum=0.8 \
                     --router_lr_mult=$router_lr_mult \
-                    --moe_bias_momentum_enabled=False \
-                    --moe_load_balance_method='bias' \
-                    --moe_aux_loss_weight=1.0 \
                     --seed=$seed \
-                    --alpha=1.0 \
-                    --backend='nccl' \
-                    --device='cuda' \
+                    --alpha=$ffn_alpha \
                     --dtype='bfloat16' \
                     --compile=False \
-                    --bias_update_interval=$bias_update_interval \
-                    --depth_alpha_enabled=True \
+                    --attn_lr_mult=$attn_lr_mult \
                     --depth_multiplier=$completep_depth_multiplier \
-                    --depth_alpha_exp=1.0 \
-                    --wandb_log=True \
+                    --depth_alpha_exp=$depth_alpha_exp \
                     --expert_gamma=$expert_gamma \
-                    --wandb_project=CompleteP_1-e_cleaned_sweep \
-                    --wandb_run_name=width${width}_e${num_exp}_a${num_act}_mg_lr${lr} \
+                    --wandb_log=False \
+                    --wandb_project=CompleteP_opt_moe_tau \
+                    --wandb_run_name=width${width}_moe_tau${moe_tau} \
                     >> /home/ubuntu/MuP_MOE/std_out/debugged_outlog_fineweb_${timestamp}
             done
         done

@@ -340,6 +340,7 @@ class GPTConfig:
     alpha: float = 2.0 # Hidden layer size multiplier (hidden_size = alpha * n_embd)
     max_iters: int = 12000 # Maximum number of training iterations (used for bias decay)
     bias_update_interval: int = 100 # Update bias every n iterations
+    attn_lr_mult: float = 1.0 # Learning rate multiplier for attention weights
 class GPT(nn.Module):
 
     def __init__(self, config):
@@ -350,6 +351,7 @@ class GPT(nn.Module):
         ### Expert Gamma Scaling ###
         self.gamma = config.expert_gamma
         self.router_lr_mult = config.router_lr_mult
+        self.attn_lr_mult = config.attn_lr_mult
         # print(f"Expert gamma: {self.gamma}, Router LR mult: {self.router_lr_mult}")
         self.transformer = nn.ModuleDict(dict(
             wte = nn.Embedding(config.vocab_size, config.n_embd),
@@ -569,7 +571,8 @@ class GPT(nn.Module):
             ### Begin muP code ###
             emb_params = []
             hidden_ln_params = []
-            hidden_weight_params = []
+            hidden_mlp_weight_params = []
+            hidden_attn_weight_params = []
             hidden_bias_params = []
             final_ln_params = []
             router_param_list = []
@@ -588,8 +591,10 @@ class GPT(nn.Module):
                     emb_params.append(p)
                 elif '.ln_' in n and not '.ln_f.' in n:
                     hidden_ln_params.append(p)
-                elif n.endswith('c_attn.weight') or n.endswith('c_fc.weight') or n.endswith('c_proj.weight'):
-                    hidden_weight_params.append(p)
+                elif n.endswith('c_attn.weight') or n.endswith('c_proj.weight'):
+                    hidden_attn_weight_params.append(p)
+                elif n.endswith('c_fc.weight'):
+                    hidden_mlp_weight_params.append(p)
                 elif n.endswith('c_attn.bias') or n.endswith('c_fc.bias') or n.endswith('c_proj.bias'):
                     hidden_bias_params.append(p)
                 elif '.ln_f.' in n:
@@ -612,9 +617,14 @@ class GPT(nn.Module):
                     'lr_scale': depth_lr_scaling,
                 },
                 {
-                    'params': hidden_weight_params,
+                    'params': hidden_mlp_weight_params,
                     'weight_decay': weight_decay / width_lr_scaling,
                     'lr_scale': width_lr_scaling * depth_lr_scaling
+                },
+                {
+                    'params': hidden_attn_weight_params,
+                    'weight_decay': weight_decay / width_lr_scaling,
+                    'lr_scale': width_lr_scaling * depth_lr_scaling * self.attn_lr_mult
                 },
                 {
                     'params': hidden_bias_params,
@@ -641,13 +651,15 @@ class GPT(nn.Module):
 
             num_emb_params = sum(p.numel() for p in emb_params)
             num_hidden_ln_params = sum(p.numel() for p in hidden_ln_params)
-            num_hidden_weight_params = sum(p.numel() for p in hidden_weight_params)
+            num_hidden_mlp_weight_params = sum(p.numel() for p in hidden_mlp_weight_params)
+            num_hidden_attn_weight_params = sum(p.numel() for p in hidden_attn_weight_params)
             num_hidden_bias_params = sum(p.numel() for p in hidden_bias_params)
             num_final_ln_params = sum(p.numel() for p in final_ln_params)
             num_router_params = sum(p.numel() for n, p in router_param_list)
             print(f"num embedding parameter tensors: {len(emb_params)}, with {num_emb_params:,} parameters")
             print(f"num hidden layernorm parameter tensors: {len(hidden_ln_params)}, with {num_hidden_ln_params:,} parameters")
-            print(f"num hidden weight parameter tensors: {len(hidden_weight_params)}, with {num_hidden_weight_params:,} parameters")
+            print(f"num hidden mlp weight parameter tensors: {len(hidden_mlp_weight_params)}, with {num_hidden_mlp_weight_params:,} parameters")
+            print(f"num hidden attn weight parameter tensors: {len(hidden_attn_weight_params)}, with {num_hidden_attn_weight_params:,} parameters")
             print(f"num hidden bias parameter tensors: {len(hidden_bias_params)}, with {num_hidden_bias_params:,} parameters")
             print(f"num final layernorm parameter tensors: {len(final_ln_params)}, with {num_final_ln_params:,} parameters")
             print(f"num router parameter tensors: {len(router_param_list)}, with {num_router_params:,} parameters")

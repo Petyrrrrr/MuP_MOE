@@ -41,13 +41,13 @@ from trainer import Trainer
 # default config values designed to train a gpt2 (124M) on OpenWebText
 # I/O
 out_dir = 'out'
-eval_interval = 2000
+eval_interval = 1
 log_interval = 1
 eval_iters = 200
 eval_only = False # if True, script exits right after the first eval
-skip_val_loss = False # If True, will only measure train loss
-always_save_checkpoint = True # if True, always save a checkpoint after each eval
-never_save_checkpoint = False # if True, never save a checkpoint
+skip_val_loss = True # If True, will only measure train loss
+always_save_checkpoint = False # if True, always save a checkpoint after each eval
+never_save_checkpoint = True # if True, never save a checkpoint
 init_from = 'scratch' # 'scratch' or 'resume' or 'gpt2*'
 # wandb logging
 wandb_log = False # disabled by default
@@ -78,11 +78,11 @@ weight_decay = 1e-1
 beta1 = 0.9
 beta2 = 0.95
 adam_eps = 1e-10
-grad_clip = 1.0 # clip gradients at this value, or disable if == 0.0
+grad_clip = 3.0 # clip gradients at this value, or disable if == 0.0
 # learning rate decay settings
 decay_lr = True # whether to decay the learning rate
 warmup_iters = 1000 # how many steps to warm up for
-lr_decay_iters = 600000 # should be ~= max_iters per Chinchilla
+lr_decay_iters = 2000 # should be ~= max_iters per Chinchilla
 min_lr = 6e-5 # minimum learning rate, should be ~= learning_rate/10 per Chinchilla
 # mup settings
 mup_enabled = False # Whether to use muP. If False then all other mup variables are ignored
@@ -102,6 +102,7 @@ moe_bias_momentum_enabled = True # Enable momentum for router bias updates (only
 moe_load_balance_method = "bias" # "bias" or "aux_loss" - method for load balancing  
 moe_aux_loss_weight = 0.01 # Auxiliary loss coefficient (only used with aux_loss method)
 router_lr_mult = 1.0 # Multiplier for router learning rate (default 1.0)
+attn_lr_mult = 1.0 # Multiplier for attention learning rate (default 1.0)
 expert_gamma = 1.0 # Expert gamma scaling
 alpha = 2.0 # Hidden layer size multiplier (hidden_size = alpha * n_embd)
 max_nan_losses = 50 # Maximum number of NaN losses before raising error
@@ -214,7 +215,7 @@ model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=bloc
                   moe_tau=moe_tau, moe_bias_lr=moe_bias_lr, moe_bias_momentum=moe_bias_momentum,
                   moe_bias_momentum_enabled=moe_bias_momentum_enabled, moe_load_balance_method=moe_load_balance_method,
                   moe_aux_loss_weight=moe_aux_loss_weight, alpha=alpha, max_iters=max_iters, bias_update_interval=bias_update_interval,
-                  depth_alpha_enabled=depth_alpha_enabled, depth_multiplier=depth_multiplier, depth_alpha_exp=depth_alpha_exp, expert_gamma=expert_gamma, router_lr_mult=router_lr_mult
+                  depth_alpha_enabled=depth_alpha_enabled, depth_multiplier=depth_multiplier, depth_alpha_exp=depth_alpha_exp, expert_gamma=expert_gamma, router_lr_mult=router_lr_mult, attn_lr_mult=attn_lr_mult
                   ) # start with model_args from command line
 
 if init_from == 'scratch':
