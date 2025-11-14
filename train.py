@@ -71,6 +71,8 @@ init_std = 0.02 # Initialization standard deviation for weights
 depth_alpha_enabled = True
 depth_multiplier = 1.0
 depth_alpha_exp = 1.0
+t_ema_inv = 1.0
+router_lr = 0.005
 # adamw optimizer
 learning_rate = 6e-4 # max learning rate
 max_iters = 300 # total number of training iterations
