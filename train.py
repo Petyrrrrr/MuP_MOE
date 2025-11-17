@@ -97,6 +97,7 @@ mup_enable_coord_check_logging = False # If True will track the output.abs().mea
 # MOE settings
 num_exp = 1 # Number of experts (set to 1 to disable MOE)
 num_act = 1 # Number of active experts (top-k)
+router_init_mult = 1.0
 moe_tau = 1.0 # Temperature for router softmax
 moe_bias_lr = 1e-2 # Learning rate for router bias updates (only used with bias method)
 moe_bias_momentum = 0.9 # EMA decay factor for bias gradient momentum (only used with bias method)
@@ -217,7 +218,8 @@ model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=bloc
                   moe_tau=moe_tau, moe_bias_lr=moe_bias_lr, moe_bias_momentum=moe_bias_momentum,
                   moe_bias_momentum_enabled=moe_bias_momentum_enabled, moe_load_balance_method=moe_load_balance_method,
                   moe_aux_loss_weight=moe_aux_loss_weight, alpha=alpha, max_iters=max_iters, bias_update_interval=bias_update_interval,
-                  depth_alpha_enabled=depth_alpha_enabled, depth_multiplier=depth_multiplier, depth_alpha_exp=depth_alpha_exp, expert_gamma=expert_gamma, router_lr_mult=router_lr_mult, attn_lr_mult=attn_lr_mult
+                  depth_alpha_enabled=depth_alpha_enabled, depth_multiplier=depth_multiplier, depth_alpha_exp=depth_alpha_exp, expert_gamma=expert_gamma, 
+                  router_lr_mult=router_lr_mult, attn_lr_mult=attn_lr_mult, router_init_mult=router_init_mult
                   ) # start with model_args from command line
 
 if init_from == 'scratch':

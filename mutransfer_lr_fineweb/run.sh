@@ -16,39 +16,42 @@ timestamp=$(python -c "from datetime import datetime; print(datetime.now().strft
 max_iters=2000
 warmup_iters=250
 head_size=64
+t_ema_inv=1.0
 total_batch_size=480
 gradient_accumulation_steps=8
 batch_size=60
-seed=1
+
+n_layer=8
+mup_base_width=256
+completep_base_depth=8
 
 init_std=0.02
 moe_tau=1.0
-t_ema_inv=1.0
-lr=0.064
-router_lr=0.005
-attn_lr_mult=2.0
-n_layer=8
-for width in 256
+base_lr=0.064
+attn_lr_mult=0.0625
+router_lr=0.00125
+router_init_mult=1.0
+
+for width in 512
 do
     for num_exp in 16
     do
-        for moe_tau in 1.0
+        for router_init_mult in 1.0
         do
+            for seed in 1
+            do
                 moe_bias_lr=0.1
                 expert_gamma=1.0
                 ffn_alpha=1.0
                 depth_alpha_exp=1.0
                 n_heads=$((width / head_size))
                 num_act=$((num_exp/4))
-
-                mup_base_width=256
-                completep_base_depth=8
                 completep_depth_multiplier=$(echo "scale=8; $n_layer/$completep_base_depth" | bc -l)
                 mup_width_multiplier=$(echo "scale=8; $width/$mup_base_width" | bc -l)
-                router_lr_mult=$(echo "scale=8; $router_lr/$lr" | bc -l)
-                weight_decay=$(echo "scale=8; $t_ema_inv/($max_iters*$lr)" | bc -l)
+                router_lr_mult=$(echo "scale=8; $router_lr/$base_lr" | bc -l)
+                weight_decay=$(echo "scale=8; $t_ema_inv/($max_iters*$base_lr)" | bc -l)
                 
-                out_dir="run_data/mutransfer_lr_fineweb/out_${timestamp}/width${width}_depth${n_layer}_experts${num_exp}_active${num_act}_seed${seed}_lr${lr}"
+                out_dir="run_data/mutransfer_lr_fineweb/out_${timestamp}/width${width}_depth${n_layer}_experts${num_exp}_active${num_act}_seed${seed}_lr${base_lr}"
                 $LAUNCHER train.py \
                     --out_dir=$out_dir \
                     --eval_iters=$((100 * gradient_accumulation_steps / NUM_GPUS)) \
@@ -58,12 +61,14 @@ do
                     --gradient_accumulation_steps=$gradient_accumulation_steps \
                     --batch_size=$batch_size \
                     --n_layer=$n_layer \
+                    --router_init_mult=$router_init_mult \
                     --n_head=$n_heads \
                     --n_embd=$width \
                     --dropout=0.0 \
                     --bias=False \
                     --init_std=$init_std \
-                    --learning_rate=$lr \
+                    --router_lr=$router_lr \
+                    --learning_rate=$base_lr \
                     --max_iters=$max_iters \
                     --weight_decay=$weight_decay \
                     --mup_enabled=True \
@@ -83,9 +88,9 @@ do
                     --depth_multiplier=$completep_depth_multiplier \
                     --depth_alpha_exp=$depth_alpha_exp \
                     --expert_gamma=$expert_gamma \
-                    --wandb_log=False \
-                    --wandb_project=CompleteP_opt_moe_tau \
-                    --wandb_run_name=width${width}_moe_tau${moe_tau} \
+                    --wandb_log=True \
+                    --wandb_project=CompleteP_sweep_router_init_mult \
+                    --wandb_run_name=width${width}_router_init_mult${router_init_mult} \
                     >> /home/ubuntu/MuP_MOE/std_out/debugged_outlog_fineweb_${timestamp}
             done
         done

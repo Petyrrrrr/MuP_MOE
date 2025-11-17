@@ -341,6 +341,7 @@ class GPTConfig:
     max_iters: int = 12000 # Maximum number of training iterations (used for bias decay)
     bias_update_interval: int = 100 # Update bias every n iterations
     attn_lr_mult: float = 1.0 # Learning rate multiplier for attention weights
+    router_init_mult: float = 1.0 # Multiplier for router initial weights
 class GPT(nn.Module):
 
     def __init__(self, config):
@@ -375,17 +376,17 @@ class GPT(nn.Module):
                 ### Begin muP code ###
                 # Adjust hidden weight initialization variance by 1 / mup_width_multiplier
                 if pn.endswith('c_attn.weight') or pn.endswith('c_fc.weight'):
-                    torch.nn.init.normal_(p, mean=0.0, std=config.init_std / math.sqrt(config.mup_width_multiplier))
+                    torch.nn.init.normal_(p, mean=0.0, std = config.init_std / math.sqrt(config.mup_width_multiplier))
                 elif pn.endswith('c_proj.weight'):
-                    torch.nn.init.normal_(p, mean=0.0, std=config.init_std / math.sqrt(config.mup_width_multiplier))
+                    torch.nn.init.normal_(p, mean=0.0, std = config.init_std / math.sqrt(config.mup_width_multiplier))
                 elif pn.endswith('router.weight'):
-                    torch.nn.init.normal_(p, mean=0.0, std=config.init_std / (config.mup_width_multiplier**self.gamma))
+                    torch.nn.init.normal_(p, mean=0.0, std = config.router_init_mult * config.init_std / (config.mup_width_multiplier**self.gamma))
                 ### End muP code ###
             elif pn.endswith('c_proj.weight'):
                 # Handle both regular MLP and MOE experts for non-muP
                 torch.nn.init.normal_(p, mean=0.0, std=config.init_std / math.sqrt(2 * config.n_layer))
             elif pn.endswith('router.weight'):
-                torch.nn.init.normal_(p, mean=0.0, std=config.init_std)
+                torch.nn.init.normal_(p, mean=0.0, std=config.router_init_mult * config.init_std)
 
         # report number of parameters
         print("number of parameters: %.2fM" % (self.get_num_params()/1e6,))
