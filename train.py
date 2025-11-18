@@ -110,6 +110,8 @@ expert_gamma = 1.0 # Expert gamma scaling
 alpha = 2.0 # Hidden layer size multiplier (hidden_size = alpha * n_embd)
 max_nan_losses = 50 # Maximum number of NaN losses before raising error
 bias_update_interval = 1 # Update bias every n iterations
+beta_moe=1.0
+beta_attn=1.0
 # seed
 seed = 1337
 # DDP settings
@@ -219,7 +221,7 @@ model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=bloc
                   moe_bias_momentum_enabled=moe_bias_momentum_enabled, moe_load_balance_method=moe_load_balance_method,
                   moe_aux_loss_weight=moe_aux_loss_weight, alpha=alpha, max_iters=max_iters, bias_update_interval=bias_update_interval,
                   depth_alpha_enabled=depth_alpha_enabled, depth_multiplier=depth_multiplier, depth_alpha_exp=depth_alpha_exp, expert_gamma=expert_gamma, 
-                  router_lr_mult=router_lr_mult, attn_lr_mult=attn_lr_mult, router_init_mult=router_init_mult
+                  router_lr_mult=router_lr_mult, attn_lr_mult=attn_lr_mult, router_init_mult=router_init_mult, beta_moe=beta_moe, beta_attn=beta_attn
                   ) # start with model_args from command line
 
 if init_from == 'scratch':

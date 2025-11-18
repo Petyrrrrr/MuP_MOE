@@ -285,6 +285,8 @@ class Block(nn.Module):
 
     def __init__(self, config):
         super().__init__()
+        self.beta_moe = config.beta_moe
+        self.beta_attn = config.beta_attn
         self.ln_1 = LayerNorm(config.n_embd, bias=config.bias)
         self.attn = CausalSelfAttention(config)
         self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
@@ -297,14 +299,14 @@ class Block(nn.Module):
             self.use_moe = False
 
     def forward(self, x):
-        x = x + self.residual_scaling * self.attn(self.ln_1(x))
+        x = x + self.residual_scaling * self.attn(self.ln_1(x)) * self.beta_attn
         if self.use_moe:
             mlp_result = self.mlp(self.ln_2(x))
             mlp_out, mask = mlp_result
-            x = x + self.residual_scaling * mlp_out
+            x = x + self.residual_scaling * mlp_out * self.beta_moe
             return x, mask
         else:
-            x = x + self.residual_scaling * self.mlp(self.ln_2(x))
+            x = x + self.residual_scaling * self.beta_moe * self.mlp(self.ln_2(x))
             return x
 
 @dataclass
@@ -342,6 +344,8 @@ class GPTConfig:
     bias_update_interval: int = 100 # Update bias every n iterations
     attn_lr_mult: float = 1.0 # Learning rate multiplier for attention weights
     router_init_mult: float = 1.0 # Multiplier for router initial weights
+    beta_moe: float = 1.0 # Beta for MOE loss
+    beta_attn: float = 1.0 # Beta for attention loss
 class GPT(nn.Module):
 
     def __init__(self, config):

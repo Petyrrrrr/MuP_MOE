@@ -27,18 +27,21 @@ completep_base_depth=8
 
 init_std=0.02
 moe_tau=1.0
-base_lr=0.064
+base_lr=0.09
 attn_lr_mult=0.0625
 router_lr=0.00125
 router_init_mult=1.0
+beta_moe=1.0
+beta_attn=1.0
 
+seed=1
 for width in 512
 do
-    for num_exp in 16
+    for num_exp in 4
     do
-        for router_init_mult in 1.0
+        for beta_moe in 0.0625 0.25 1.0 4.0 16.0
         do
-            for seed in 1
+            for beta_attn in 0.0625 0.25 1.0 4.0 16.0
             do
                 moe_bias_lr=0.1
                 expert_gamma=1.0
@@ -80,6 +83,8 @@ do
                     --moe_tau=$moe_tau \
                     --moe_bias_lr=$moe_bias_lr \
                     --router_lr_mult=$router_lr_mult \
+                    --beta_moe=$beta_moe \
+                    --beta_attn=$beta_attn \
                     --seed=$seed \
                     --alpha=$ffn_alpha \
                     --dtype='bfloat16' \
@@ -89,8 +94,8 @@ do
                     --depth_alpha_exp=$depth_alpha_exp \
                     --expert_gamma=$expert_gamma \
                     --wandb_log=True \
-                    --wandb_project=CompleteP_sweep_router_init_mult \
-                    --wandb_run_name=width${width}_router_init_mult${router_init_mult} \
+                    --wandb_project=CompleteP_sweep_beta_grid_e4 \
+                    --wandb_run_name=width${width}_beta_moe${beta_moe}_beta_attn${beta_attn} \
                     >> /home/ubuntu/MuP_MOE/std_out/debugged_outlog_fineweb_${timestamp}
             done
         done
