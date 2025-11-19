@@ -22,26 +22,31 @@ gradient_accumulation_steps=8
 batch_size=60
 
 n_layer=8
+num_exp=4
 mup_base_width=256
 completep_base_depth=8
+seed=1
 
 init_std=0.02
 moe_tau=1.0
 base_lr=0.09
-attn_lr_mult=0.0625
 router_lr=0.00125
 router_init_mult=1.0
 beta_moe=1.0
 beta_attn=1.0
+mlp_up_lr_mult=1.0
+attn_qkv_lr_mult=0.0625
+attn_lr_down_mult=0.0625
+mlp_down_lr_mult=0.0625
 
-seed=1
+
 for width in 512
 do
-    for num_exp in 4
+    for attn_qkv_lr_mult in 0.03125 0.0625 0.125
     do
-        for beta_moe in 0.0625 0.25 1.0 4.0 16.0
+        for attn_lr_down_mult in 0.03125 0.0625 0.125
         do
-            for beta_attn in 0.0625 0.25 1.0 4.0 16.0
+            for mlp_down_lr_mult in 0.03125 0.0625 0.125
             do
                 moe_bias_lr=0.1
                 expert_gamma=1.0
@@ -89,13 +94,16 @@ do
                     --alpha=$ffn_alpha \
                     --dtype='bfloat16' \
                     --compile=False \
-                    --attn_lr_mult=$attn_lr_mult \
+                    --mlp_up_lr_mult=$mlp_up_lr_mult \
+                    --attn_qkv_lr_mult=$attn_qkv_lr_mult \
+                    --mlp_down_lr_mult=$mlp_down_lr_mult \
+                    --attn_lr_down_mult=$attn_lr_down_mult \
                     --depth_multiplier=$completep_depth_multiplier \
                     --depth_alpha_exp=$depth_alpha_exp \
                     --expert_gamma=$expert_gamma \
                     --wandb_log=True \
-                    --wandb_project=CompleteP_sweep_beta_grid_e4 \
-                    --wandb_run_name=width${width}_beta_moe${beta_moe}_beta_attn${beta_attn} \
+                    --wandb_project=CompleteP_sweep_3d_grid_e4 \
+                    --wandb_run_name=width${width}_attn_qkv_lr_mult${attn_qkv_lr_mult}_attn_lr_down_mult${attn_lr_down_mult}_mlp_down_lr_mult${mlp_down_lr_mult} \
                     >> /home/ubuntu/MuP_MOE/std_out/debugged_outlog_fineweb_${timestamp}
             done
         done

@@ -6,7 +6,8 @@ from typing import Tuple
 import torch
 from model import GPTConfig, GPT
 
-os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
+#use cpu to count parameters
+os.environ['CUDA_VISIBLE_DEVICES'] = ''
 
 def build_config(args: argparse.Namespace) -> GPTConfig:
     if args.n_act > args.n_exp:
@@ -59,11 +60,11 @@ def count_parameters(model: GPT) -> Tuple[int, int]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Estimate total and active parameters for MuP-MoE GPT models.")
-    parser.add_argument("--n-layer", type=int, default=14)
+    parser.add_argument("--n-layer", type=int, default=8)
     parser.add_argument("--n-head", type=int, default=64)
     parser.add_argument("--n-embd", type=int, default=768)
     parser.add_argument("--alpha", type=float, default=1.0)
-    parser.add_argument("--n-exp", type=int, default=1)
+    parser.add_argument("--n-exp", type=int, default=3)
     parser.add_argument("--n-act", type=int, default=1)
     parser.add_argument("--block-size", type=int, default=1024)
     parser.add_argument("--vocab-size", type=int, default=50304)
