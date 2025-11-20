@@ -350,6 +350,7 @@ class GPTConfig:
     beta_attn: float = 1.0 # Beta for attention loss
     attn_lr_down_mult: float = 1.0 # Learning rate multiplier for attention weights
     attn_qkv_lr_mult: float = 1.0 # Learning rate multiplier for attention QKV weights
+    others_lr_mult: float = 1.0 # Learning rate multiplier for other weights
 class GPT(nn.Module):
 
     def __init__(self, config):
@@ -364,7 +365,7 @@ class GPT(nn.Module):
         self.mlp_down_lr_mult = config.mlp_down_lr_mult
         self.attn_lr_down_mult = config.attn_lr_down_mult
         self.attn_qkv_lr_mult = config.attn_qkv_lr_mult
-        # print(f"Expert gamma: {self.gamma}, Router LR mult: {self.router_lr_mult}")
+        self.others_lr_mult = config.others_lr_mult
         self.transformer = nn.ModuleDict(dict(
             wte = nn.Embedding(config.vocab_size, config.n_embd),
             wpe = nn.Embedding(config.block_size, config.n_embd),
@@ -627,12 +628,12 @@ class GPT(nn.Module):
                 {
                     'params': emb_params,
                     'weight_decay': weight_decay,
-                    'lr_scale': 1.0,
+                    'lr_scale': self.others_lr_mult,
                 },
                 {
                     'params': hidden_ln_params,
                     'weight_decay': 0.0,
-                    'lr_scale': depth_lr_scaling,
+                    'lr_scale': depth_lr_scaling * self.others_lr_mult,
                 },
                 {
                     'params': hidden_attn_weight_params,
@@ -657,12 +658,12 @@ class GPT(nn.Module):
                 {
                     'params': hidden_bias_params,
                     'weight_decay': 0.0,
-                    'lr_scale': 1.0,
+                    'lr_scale': self.others_lr_mult,
                 },
                 {
                     'params': final_ln_params,
                     'weight_decay': 0.0,
-                    'lr_scale': 1.0,
+                    'lr_scale': self.others_lr_mult,
                 }
             ]
             for router_name, router_param in router_param_list:

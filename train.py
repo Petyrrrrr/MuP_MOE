@@ -105,6 +105,7 @@ moe_bias_momentum_enabled = True # Enable momentum for router bias updates (only
 moe_load_balance_method = "bias" # "bias" or "aux_loss" - method for load balancing  
 moe_aux_loss_weight = 0.01 # Auxiliary loss coefficient (only used with aux_loss method)
 router_lr_mult = 1.0 # Multiplier for router learning rate (default 1.0)
+others_lr_mult = 1.0 # Multiplier for other weights learning rate (default 1.0)
 mlp_up_lr_mult = 1.0 # Multiplier for MLP up learning rate (default 1.0)
 mlp_down_lr_mult = 1.0 # Multiplier for MLP down learning rate (default 1.0)
 attn_qkv_lr_mult = 1.0 # Multiplier for attention QKV learning rate (default 1.0)
@@ -225,7 +226,8 @@ model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=bloc
                   moe_aux_loss_weight=moe_aux_loss_weight, alpha=alpha, max_iters=max_iters, bias_update_interval=bias_update_interval,
                   depth_alpha_enabled=depth_alpha_enabled, depth_multiplier=depth_multiplier, depth_alpha_exp=depth_alpha_exp, expert_gamma=expert_gamma, 
                   router_lr_mult=router_lr_mult, router_init_mult=router_init_mult, beta_moe=beta_moe, beta_attn=beta_attn,
-                  mlp_up_lr_mult=mlp_up_lr_mult, mlp_down_lr_mult=mlp_down_lr_mult, attn_lr_down_mult=attn_lr_down_mult, attn_qkv_lr_mult=attn_qkv_lr_mult
+                  mlp_up_lr_mult=mlp_up_lr_mult, mlp_down_lr_mult=mlp_down_lr_mult, attn_lr_down_mult=attn_lr_down_mult, attn_qkv_lr_mult=attn_qkv_lr_mult,
+                  others_lr_mult=others_lr_mult
                   ) # start with model_args from command line
 
 if init_from == 'scratch':
