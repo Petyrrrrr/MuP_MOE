@@ -193,7 +193,7 @@ class MLP_MOE(nn.Module):
         _, topk_indices = mu_add_bias.topk(self.num_act, dim=-1)  # (B*T, num_act)
 
         selected = score.gather(-1, topk_indices).to(score.dtype)  # (B*T, num_act)
-        selected = (selected / self.n_exp).to(score.dtype) #normalize experts
+        selected = (selected / self.num_act).to(score.dtype) #normalize experts
 
         score = torch.zeros_like(score).scatter(1, topk_indices, selected)
         mask  = torch.zeros_like(score).scatter(1, topk_indices, 1.0)
@@ -306,7 +306,7 @@ class Block(nn.Module):
             x = x + self.residual_scaling * mlp_out * self.beta_moe
             return x, mask
         else:
-            x = x + self.residual_scaling * self.beta_moe * self.mlp(self.ln_2(x))
+            x = x + self.residual_scaling * self.mlp(self.ln_2(x))
             return x
 
 @dataclass

@@ -29,24 +29,27 @@ seed=1
 
 init_std=0.02
 moe_tau=1.0
-base_lr=0.09
+base_lr=0.005
 router_lr=0.00125
 router_init_mult=1.0
-beta_moe=1.0
+beta_moe=0.25
 beta_attn=1.0
 
-others_lr_mult=16.0
-mlp_up_lr_mult=16.0
-attn_qkv_lr_mult=1.0
-attn_lr_down_mult=1.0
-mlp_down_lr_mult=1.0
+others_lr_mult=1.0
+mlp_up_lr_mult=1.0
+attn_qkv_lr_mult=0.0625
+attn_lr_down_mult=0.0625
+mlp_down_lr_mult=0.0625
+t_ema_inv=1.0
 
 num_exp=4
 
 for width in 512
 do
-    for base_lr in 0.0056
+    for beta_moe in 0.125 0.25 0.5 1.0
     do
+        for num_exp in 4 16
+        do
                 moe_bias_lr=0.1
                 expert_gamma=1.0
                 ffn_alpha=1.0
@@ -56,7 +59,7 @@ do
                 completep_depth_multiplier=$(echo "scale=8; $n_layer/$completep_base_depth" | bc -l)
                 mup_width_multiplier=$(echo "scale=8; $width/$mup_base_width" | bc -l)
                 router_lr_mult=$(echo "scale=8; $router_lr/$base_lr" | bc -l)
-                weight_decay=0.0
+                weight_decay=$(echo "scale=8; $t_ema_inv/($max_iters*$base_lr)" | bc -l)
                 
                 out_dir="run_data/mutransfer_lr_fineweb/out_${timestamp}/width${width}_depth${n_layer}_experts${num_exp}_active${num_act}_seed${seed}_lr${base_lr}"
                 $LAUNCHER train.py \
@@ -101,10 +104,10 @@ do
                     --depth_multiplier=$completep_depth_multiplier \
                     --depth_alpha_exp=$depth_alpha_exp \
                     --expert_gamma=$expert_gamma \
-                    --wandb_log=False \
-                    --wandb_project=CompleteP_sweep_lr_nonhidden_e4a1 \
-                    --wandb_run_name=width${width}_base_lr${base_lr} \
+                    --wandb_log=True \
+                    --wandb_project=CompleteP_sweep_beta_moe \
+                    --wandb_run_name=width${width}_beta_moe${beta_moe} \
                     >> /home/ubuntu/MuP_MOE/std_out/debugged_outlog_fineweb_${timestamp}
-
+        done
     done
 done
