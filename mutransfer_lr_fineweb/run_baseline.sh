@@ -21,35 +21,31 @@ total_batch_size=480
 gradient_accumulation_steps=8
 batch_size=60
 
+n_layer=8
 mup_base_width=256
 completep_base_depth=8
-
 seed=1
+
 init_std=0.02
 moe_tau=1.0
-base_lr=0.09
-router_lr=0.00125
+router_lr_mult=1.0
 router_init_mult=1.0
-beta_moe=0.25
+beta_moe=1.0
 beta_attn=1.0
-
 others_lr_mult=1.0
 mlp_up_lr_mult=1.0
-attn_qkv_lr_mult=0.0625
-attn_lr_down_mult=0.0625
-mlp_down_lr_mult=0.0625
-t_ema_inv=1.0
+attn_qkv_lr_mult=1.0
+attn_lr_down_mult=1.0
+mlp_down_lr_mult=1.0
+t_ema_inv=0.0
 
-num_exp=8
-n_layer=8
-
-for width in 512
+for width in 2048
 do
     for n_layer in 8
     do
-        for seed in 1
+        for num_exp in 4
         do
-            for init_std in 0.02
+            for base_lr in 0.016 0.032 0.064
             do
                 moe_bias_lr=0.1
                 expert_gamma=1.0
@@ -59,7 +55,6 @@ do
                 num_act=$((num_exp/4))
                 completep_depth_multiplier=$(echo "scale=8; $n_layer/$completep_base_depth" | bc -l)
                 mup_width_multiplier=$(echo "scale=8; $width/$mup_base_width" | bc -l)
-                router_lr_mult=$(echo "scale=8; $router_lr/$base_lr" | bc -l)
                 weight_decay=0.0
                 
                 out_dir="run_data/mutransfer_lr_fineweb/out_${timestamp}/width${width}_depth${n_layer}_experts${num_exp}_active${num_act}_seed${seed}_lr${base_lr}"
@@ -106,8 +101,8 @@ do
                     --depth_alpha_exp=$depth_alpha_exp \
                     --expert_gamma=$expert_gamma \
                     --wandb_log=True \
-                    --wandb_project=CompleteP_scratch_wp \
-                    --wandb_run_name=width${width}_depth${n_layer}_init_std${init_std} \
+                    --wandb_project=Transfer_base_lr_width \
+                    --wandb_run_name=width${width}_lr${base_lr} \
                     >> /home/ubuntu/MuP_MOE/std_out/debugged_outlog_fineweb_${timestamp}
             done
         done
