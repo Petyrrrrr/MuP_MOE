@@ -24,10 +24,10 @@ batch_size=60
 mup_base_width=256
 completep_base_depth=8
 
-seed=1
+seed=10
 init_std=0.02
 moe_tau=1.0
-base_lr=0.09
+base_lr=0.128
 router_lr=0.00125
 router_init_mult=1.0
 beta_moe=0.25
@@ -40,23 +40,23 @@ attn_lr_down_mult=0.0625
 mlp_down_lr_mult=0.0625
 t_ema_inv=1.0
 
-num_exp=8
+num_exp=12
 n_layer=8
 
 for width in 512
 do
-    for n_layer in 8
+    for base_lr in 0.064 0.09 0.128
     do
-        for num_exp in 4
+        for num_exp in 12 24 48
         do
-            for base_lr in 0.016 0.032 0.064 0.128
+            for mlp_down_lr_mult in 0.03125 0.0625 0.125 0.25
             do
                 moe_bias_lr=0.1
                 expert_gamma=1.0
                 ffn_alpha=1.0
                 depth_alpha_exp=1.0
                 n_heads=$((width / head_size))
-                num_act=$((num_exp/4))
+                num_act=$((num_exp/12))
                 completep_depth_multiplier=$(echo "scale=8; $n_layer/$completep_base_depth" | bc -l)
                 mup_width_multiplier=$(echo "scale=8; $width/$mup_base_width" | bc -l)
                 router_lr_mult=$(echo "scale=8; $router_lr/$base_lr" | bc -l)
@@ -106,8 +106,8 @@ do
                     --depth_alpha_exp=$depth_alpha_exp \
                     --expert_gamma=$expert_gamma \
                     --wandb_log=True \
-                    --wandb_project=cccc_scratch \
-                    --wandb_run_name=width${width}_depth${n_layer}_init_std${init_std} \
+                    --wandb_project=cccc_sweep_mlp_down_lr_mult \
+                    --wandb_run_name=width${width}_depth${n_layer}_experts${num_exp}_lr${base_lr}_mlp_down_lr_mult${mlp_down_lr_mult} \
                     >> /home/ubuntu/MuP_MOE/std_out/debugged_outlog_cccc_${timestamp}
             done
         done
