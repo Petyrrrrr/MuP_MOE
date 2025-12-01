@@ -30,7 +30,7 @@ moe_tau=1.0
 base_lr=0.09
 router_lr=0.00125
 router_init_mult=1.0
-beta_moe=0.1
+beta_moe=0.25
 beta_attn=1.0
 
 others_lr_mult=1.0
