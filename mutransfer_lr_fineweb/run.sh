@@ -42,21 +42,22 @@ t_ema_inv=1.0
 
 num_exp=8
 n_layer=8
+num_act=1
 
 for width in 512
 do
-    for n_layer in 8
+    for num_exp in 100
     do
-        for seed in 1
+        for seed in 18
         do
-            for init_std in 0.02
+            for base_lr in 0.09 0.128 0.032
             do
                 moe_bias_lr=0.1
                 expert_gamma=1.0
                 ffn_alpha=1.0
                 depth_alpha_exp=1.0
                 n_heads=$((width / head_size))
-                num_act=$((num_exp/4))
+                
                 completep_depth_multiplier=$(echo "scale=8; $n_layer/$completep_base_depth" | bc -l)
                 mup_width_multiplier=$(echo "scale=8; $width/$mup_base_width" | bc -l)
                 router_lr_mult=$(echo "scale=8; $router_lr/$base_lr" | bc -l)
@@ -106,8 +107,8 @@ do
                     --depth_alpha_exp=$depth_alpha_exp \
                     --expert_gamma=$expert_gamma \
                     --wandb_log=True \
-                    --wandb_project=CompleteP_scratch_wp \
-                    --wandb_run_name=width${width}_depth${n_layer}_init_std${init_std} \
+                    --wandb_project=CompleteP_scratch_kappa \
+                    --wandb_run_name=width${width}_num_exp${num_exp}_lr${base_lr}\
                     >> /home/ubuntu/MuP_MOE/std_out/debugged_outlog_fineweb_${timestamp}
             done
         done

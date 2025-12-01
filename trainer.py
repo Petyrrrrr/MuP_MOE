@@ -576,15 +576,23 @@ class Trainer:
                     torch.distributed.barrier(device_ids=[self.ddp_settings['ddp_local_rank']])  # Sync before validation
                 was_training = self.model.training
                 self.model.eval()
-                # Perform validation sweep
+                collect_moe = self.num_exp > 1
                 if self.master_process:
                     print()
                     print("Performing validation sweep at iter_num " + str(iter_num))
                     print()
-                    # Single validation pass that collects both loss and MOE stats
-                    collect_moe = self.num_exp > 1
-                    losses = estimate_loss_fn(override_skip_val=False, collect_moe_stats=collect_moe)
-                    
+
+                # All GPUs compute losses (but only master collects MOE stats)
+                losses = estimate_loss_fn(override_skip_val=False, collect_moe_stats=collect_moe if self.master_process else False)
+
+                # Average losses across all GPUs
+                if self.ddp:
+                    losses_tensor = torch.tensor([losses['train'], losses['val']], device=self.device)
+                    torch.distributed.all_reduce(losses_tensor, op=torch.distributed.ReduceOp.AVG)
+                    losses['train'], losses['val'] = losses_tensor.tolist()
+
+                # Only master process logs and saves
+                if self.master_process:
                     if not np.isnan(losses['train']):  # Only log if not NaN
                         log_dict = {
                             "iter": iter_num,
