@@ -14,7 +14,7 @@ def bias_mult(it, max_iters):
         return 1.0
 
 def get_lr(it, learning_rate, warmup_iters, lr_decay_iters, max_iters, min_lr, decay_lr = False):
-    max_iters = 10000
+    max_iters = max_iters if max_iters > 2500 else 10000
     warmup_iter = 1000
     if it < warmup_iter:
         return 1.0 * learning_rate * it / warmup_iter
