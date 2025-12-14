@@ -85,7 +85,7 @@ grad_clip = 3.0 # clip gradients at this value, or disable if == 0.0
 decay_lr = True # whether to decay the learning rate
 warmup_iters = 1000 # how many steps to warm up for
 lr_decay_iters = 2000 # should be ~= max_iters per Chinchilla
-min_lr = 6e-5 # minimum learning rate, should be ~= learning_rate/10 per Chinchilla
+min_lr = 0.0 # minimum learning rate, should be ~= learning_rate/10 per Chinchilla
 # mup settings
 mup_enabled = False # Whether to use muP. If False then all other mup variables are ignored
 mup_disable_attention_scaling = False # Uses 1/sqrt(d_head) attn scaling instead of 1/d_head (Only needed for the step-by-step coord check in the blog)

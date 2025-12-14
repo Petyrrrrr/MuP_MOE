@@ -19,7 +19,7 @@ def get_lr(it, learning_rate, warmup_iters, lr_decay_iters, max_iters, min_lr, d
     if it < warmup_iter:
         return 1.0 * learning_rate * it / warmup_iter
     else:
-        return 0.5 * (1.0 + math.cos(math.pi * (it - warmup_iter) / (max_iters - warmup_iter))) * learning_rate
+        return 0.5 * (1.0 + math.cos(math.pi * (it - warmup_iter) / (max_iters - warmup_iter))) * (learning_rate-min_lr) + min_lr
 
 def router_mult(iter_num, max_iters):
     return 1.0
