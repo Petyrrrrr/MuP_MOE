@@ -16,7 +16,6 @@ timestamp=$(python -c "from datetime import datetime; print(datetime.now().strft
 max_iters=2000
 warmup_iters=250
 head_size=64
-t_ema_inv=1.0
 total_batch_size=480
 gradient_accumulation_steps=8
 batch_size=60
@@ -27,9 +26,11 @@ completep_base_depth=8
 seed=1
 
 init_std=0.02
+
 moe_tau=1.0
 router_lr_mult=1.0
 router_init_mult=1.0
+
 beta_moe=1.0
 beta_attn=1.0
 others_lr_mult=1.0
@@ -38,25 +39,26 @@ attn_qkv_lr_mult=1.0
 attn_lr_down_mult=1.0
 mlp_down_lr_mult=1.0
 t_ema_inv=0.0
+ffn_alpha=1.0
 
-for width in 2048
+for width in 512
 do
-    for n_layer in 8
+    for seed in 1 17 34 51
     do
-        for num_exp in 4
+        for num_exp in 4 16
         do
-            for base_lr in 0.016 0.032 0.064
+            for base_lr in 0.09
             do
                 moe_bias_lr=0.1
                 expert_gamma=1.0
-                ffn_alpha=1.0
+                
                 depth_alpha_exp=1.0
                 n_heads=$((width / head_size))
                 num_act=$((num_exp/4))
                 completep_depth_multiplier=$(echo "scale=8; $n_layer/$completep_base_depth" | bc -l)
                 mup_width_multiplier=$(echo "scale=8; $width/$mup_base_width" | bc -l)
                 weight_decay=0.0
-                
+                router_lr=$(echo "scale=8; $base_lr*$router_lr_mult" | bc -l)
                 out_dir="run_data/mutransfer_lr_fineweb/out_${timestamp}/width${width}_depth${n_layer}_experts${num_exp}_active${num_act}_seed${seed}_lr${base_lr}"
                 $LAUNCHER train.py \
                     --out_dir=$out_dir \
@@ -101,7 +103,7 @@ do
                     --depth_alpha_exp=$depth_alpha_exp \
                     --expert_gamma=$expert_gamma \
                     --wandb_log=True \
-                    --wandb_project=Transfer_base_lr_width \
+                    --wandb_project=Constant_ablation \
                     --wandb_run_name=width${width}_lr${base_lr} \
                     >> /home/ubuntu/MuP_MOE/std_out/debugged_outlog_fineweb_${timestamp}
             done

@@ -40,17 +40,16 @@ attn_lr_down_mult=0.0625
 mlp_down_lr_mult=0.0625
 t_ema_inv=1.0
 
-num_exp=8
 n_layer=8
-num_act=1
+num_act=4
 
 for width in 512
 do
-    for num_exp in 100
+    for num_exp in 16
     do
-        for seed in 18
+        for seed in 17
         do
-            for base_lr in 0.09 0.128 0.032
+            for base_lr in 0.032 0.064 0.09 0.128 0.256
             do
                 moe_bias_lr=0.1
                 expert_gamma=1.0
@@ -107,8 +106,8 @@ do
                     --depth_alpha_exp=$depth_alpha_exp \
                     --expert_gamma=$expert_gamma \
                     --wandb_log=True \
-                    --wandb_project=CompleteP_scratch_kappa \
-                    --wandb_run_name=width${width}_num_exp${num_exp}_lr${base_lr}\
+                    --wandb_project=Fineweb_baseline_Seeds \
+                    --wandb_run_name=width${width}_num_exp${num_exp}_seed${seed}_lr${base_lr}\
                     >> /home/ubuntu/MuP_MOE/std_out/debugged_outlog_fineweb_${timestamp}
             done
         done
