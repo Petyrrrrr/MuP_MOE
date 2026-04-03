@@ -18,8 +18,8 @@ warmup_iters=250
 head_size=64
 t_ema_inv=1.0
 total_batch_size=480
-gradient_accumulation_steps=8
-batch_size=60
+gradient_accumulation_steps=16
+batch_size=30
 
 mup_base_width=256
 completep_base_depth=8
@@ -43,13 +43,13 @@ t_ema_inv=1.0
 n_layer=8
 num_act=1
 
-for width in 512
+for width in 1024 2048
 do
     for num_exp in 4 8 16
     do
         for seed in 1
         do
-            for base_lr in 0.09 0.064 0.128 0.032 0.256
+            for init_std in 0.04 0.01 0.16 0.0025
             do
                 moe_bias_lr=0.1
                 expert_gamma=1.0
@@ -107,7 +107,7 @@ do
                     --expert_gamma=$expert_gamma \
                     --wandb_log=True \
                     --wandb_project=Softmax_ICML_Fineweb \
-                    --wandb_run_name=softmax_icml_lr${base_lr}\
+                    --wandb_run_name=softmax_icml_init_std${init_std}\
                     >> /home/ubuntu/MuP_MOE/std_out/debugged_outlog_fineweb_${timestamp}
             done
         done

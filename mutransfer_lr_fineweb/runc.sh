@@ -18,8 +18,8 @@ warmup_iters=250
 head_size=64
 t_ema_inv=1.0
 total_batch_size=480
-gradient_accumulation_steps=8
-batch_size=60
+gradient_accumulation_steps=16
+batch_size=30
 
 mup_base_width=256
 completep_base_depth=8
@@ -43,9 +43,9 @@ t_ema_inv=1.0
 n_layer=8
 num_act=1
 
-for width in 512
+for width in 1024 2048
 do
-    for num_exp in 4 8 16
+    for num_exp in 4
     do
         for seed in 1
         do

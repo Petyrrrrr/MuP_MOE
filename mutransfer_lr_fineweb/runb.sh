@@ -30,7 +30,7 @@ moe_tau=1.0
 base_lr=0.09
 router_lr=0.00125
 router_init_mult=1.0
-beta_moe=0.25
+beta_moe=0.5
 beta_attn=1.0
 
 others_lr_mult=1.0
@@ -41,22 +41,22 @@ mlp_down_lr_mult=0.0625
 t_ema_inv=1.0
 
 n_layer=8
+num_act=1
 
 for width in 512
 do
-    for num_exp in 4 16
+    for num_exp in 4 8 16
     do
-    num_act=$((num_exp/4))
-        for seed in 1 17
+        for seed in 1
         do
-            for base_lr in 0.09
+            for init_std in 0.04 0.01 0.16 0.0025
             do
                 moe_bias_lr=0.1
                 expert_gamma=1.0
                 ffn_alpha=1.0
                 depth_alpha_exp=1.0
                 n_heads=$((width / head_size))
-                
+                num_act=$((num_exp/4))
                 completep_depth_multiplier=$(echo "scale=8; $n_layer/$completep_base_depth" | bc -l)
                 mup_width_multiplier=$(echo "scale=8; $width/$mup_base_width" | bc -l)
                 router_lr_mult=$(echo "scale=8; $router_lr/$base_lr" | bc -l)
@@ -68,7 +68,7 @@ do
                     --eval_iters=$((100 * gradient_accumulation_steps / NUM_GPUS)) \
                     --csv_log=True \
                     --warmup_iters=$warmup_iters \
-                    --dataset='finewebB' \
+                    --dataset='fineweb' \
                     --gradient_accumulation_steps=$gradient_accumulation_steps \
                     --batch_size=$batch_size \
                     --n_layer=$n_layer \
@@ -106,8 +106,8 @@ do
                     --depth_alpha_exp=$depth_alpha_exp \
                     --expert_gamma=$expert_gamma \
                     --wandb_log=True \
-                    --wandb_project=FinewebBBB \
-                    --wandb_run_name=width${width}_num_exp${num_exp}_seed${seed}_lr${base_lr}\
+                    --wandb_project=Softmax_ICML_Fineweb \
+                    --wandb_run_name=softmax_icml_init_std${init_std}\
                     >> /home/ubuntu/MuP_MOE/std_out/debugged_outlog_fineweb_${timestamp}
             done
         done
