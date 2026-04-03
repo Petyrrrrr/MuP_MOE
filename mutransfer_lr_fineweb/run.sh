@@ -45,18 +45,18 @@ num_act=1
 
 for width in 512
 do
-    for num_exp in 4
+    for num_exp in 4 8 16
     do
         for seed in 1
         do
-            for base_lr in 0.09 0.064 0.032 0.128 0.256
+            for base_lr in 0.09 0.064 0.128 0.032 0.256
             do
                 moe_bias_lr=0.1
                 expert_gamma=1.0
                 ffn_alpha=1.0
                 depth_alpha_exp=1.0
                 n_heads=$((width / head_size))
-                
+                num_act=$(num_exp//4)
                 completep_depth_multiplier=$(echo "scale=8; $n_layer/$completep_base_depth" | bc -l)
                 mup_width_multiplier=$(echo "scale=8; $width/$mup_base_width" | bc -l)
                 router_lr_mult=$(echo "scale=8; $router_lr/$base_lr" | bc -l)
