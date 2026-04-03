@@ -11,7 +11,7 @@
     ]
   },
   "num_batches": 100,
-  "shuffle_seed": 42,
+  "shuffle_seed": 67,
   "shuffled": true,
   "tokens_per_batch": 492000,
   "tokens_per_input_sample": 1024,
