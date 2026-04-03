@@ -18,8 +18,8 @@ warmup_iters=250
 head_size=64
 t_ema_inv=1.0
 total_batch_size=480
-gradient_accumulation_steps=32
-batch_size=15
+gradient_accumulation_steps=8
+batch_size=60
 
 mup_base_width=256
 completep_base_depth=8
@@ -30,14 +30,14 @@ moe_tau=1.0
 base_lr=0.09
 router_lr=0.00125
 router_init_mult=1.0
-beta_moe=0.25
+beta_moe=0.5
 beta_attn=1.0
 
 others_lr_mult=1.0
 mlp_up_lr_mult=1.0
 attn_qkv_lr_mult=0.0625
 attn_lr_down_mult=0.0625
-mlp_down_lr_mult=0.0078125
+mlp_down_lr_mult=0.0625
 t_ema_inv=1.0
 
 n_layer=8
@@ -49,12 +49,11 @@ do
     do
         for seed in 1
         do
-            for base_lr in 0.048 0.192
+            for base_lr in 0.09 0.064 0.032 0.128 0.256
             do
                 moe_bias_lr=0.1
                 expert_gamma=1.0
-                ffn_alpha=64.0
-                beta_moe=2.0
+                ffn_alpha=1.0
                 depth_alpha_exp=1.0
                 n_heads=$((width / head_size))
                 
@@ -107,8 +106,8 @@ do
                     --depth_alpha_exp=$depth_alpha_exp \
                     --expert_gamma=$expert_gamma \
                     --wandb_log=True \
-                    --wandb_project=Fineweb_random_icml \
-                    --wandb_run_name=good_ffn_alpha${ffn_alpha}_beta_moe${beta_moe}_lr${base_lr}\
+                    --wandb_project=Softmax_ICML \
+                    --wandb_run_name=softmax_icml_lr${base_lr}\
                     >> /home/ubuntu/MuP_MOE/std_out/debugged_outlog_fineweb_${timestamp}
             done
         done
